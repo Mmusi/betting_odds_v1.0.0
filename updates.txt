@@ -31,3 +31,46 @@ We can enable real parlay multipliers.
 ✅ Track active slips & history
 ✅ Full “betslip ledger” UI
 ✅ Accumulators / multi-match slip building
+
+
+Fix the bankroll bug (provide complete corrected files)
+Implement bet history (with localStorage + UI component)
+Add team names (update schema + forms)
+Create a deployment guide (Docker + systemd service)
+All of the above (comprehensive upgrade)
+Let me know which enhancements you want prioritized! 🚀
+
+🚀 Next Steps (Priority 3 & 4)
+Once this is working, we can add:
+Priority 3: Team Names Enhancement
+
+Auto-extract from Betway popup
+Save match metadata (league, date, time)
+Show match status (live, finished)
+
+Priority 4: Advanced Features
+
+Cashout simulator - "What if I cash out bet X for $Y?"
+Accumulator builder - True parlays with multiplier odds
+AI recommendations - "Best risk/reward combos"
+Live tracking - Real-time odds monitoring
+
+❓ Questions?
+Let me know if you want:
+
+Import functionality (restore from JSON)
+Date range filters (last 7 days, this month, etc.)
+Statistics dashboard (win rate, average net, etc.)
+CSV export (for Excel analysis)
+Start implementing Priority 3 & 4
+
+Option C: Priority 3 & 4
+Start implementing team name auto-extraction and cashout simulator.
+
+Let me know if you still see errors or if we're good to move forward! 🔥
+
+
+
+
+
+

@@ -1,13 +1,14 @@
+// defensive_ui/src/components/ResultsPanel.jsx
 import React, { useState } from "react";
-import { useBankroll } from "../context/BankrollContext"; // ✅ NEW
+import { useBankroll } from "../context/BankrollContext";
 
 export default function ResultsPanel({ sol }) {
-  const { adjustBankroll } = useBankroll(); // ✅ BANKROLL HOOK
-  const [appliedOutcome, setAppliedOutcome] = useState(null); // prevents double apply
+  const { applyOutcome } = useBankroll();
+  const [appliedOutcome, setAppliedOutcome] = useState(null);
 
-  // -------------------------------------------
+  // ============================================
   // SAFETY CHECKS
-  // -------------------------------------------
+  // ============================================
   if (!sol) return null;
 
   if (!sol.stakes || typeof sol.stakes !== "object") {
@@ -20,15 +21,18 @@ export default function ResultsPanel({ sol }) {
 
         {sol.status === "InsufficientBankrollForMinimums" && (
           <div className="text-sm text-gray-700">
-            <p>Total minimum required: <b>{sol.total_min_required}</b></p>
-            <p>Your bankroll: <b>{sol.S}</b></p>
+            <p>
+              Total minimum required: <b>{sol.total_min_required}</b>
+            </p>
+            <p>
+              Your bankroll: <b>{sol.S}</b>
+            </p>
 
             <h3 className="mt-3 font-medium">Suggested minimal stakes:</h3>
             <ul className="ml-4 list-disc">
               {sol.fallback_single_suggestions?.map((s, i) => (
                 <li key={i}>
-                  Bet <b>{s.bet_id}</b>: stake {s.stake}
-                  (worst net:{" "}
+                  Bet <b>{s.bet_id}</b>: stake {s.stake} (worst net:{" "}
                   <span
                     className={
                       s.worst_net >= 0 ? "text-green-600" : "text-red-600"
@@ -45,20 +49,20 @@ export default function ResultsPanel({ sol }) {
 
         {sol.status !== "InsufficientBankrollForMinimums" && (
           <p className="text-gray-500 text-sm">
-            No stake plan could be generated.  
-            Please adjust bankroll or odds and try again.
+            No stake plan could be generated. Please adjust bankroll or odds
+            and try again.
           </p>
         )}
       </div>
     );
   }
 
-  // -------------------------------------------
-  // NORMAL RENDER
-  // -------------------------------------------
+  // ============================================
+  // HELPER FUNCTIONS
+  // ============================================
   const isGood = sol.R > 0;
 
-  // group bets by match
+  // Group bets by match
   const grouped = {};
   for (const [id, val] of Object.entries(sol.stakes)) {
     const match = id.split("_")[0];
@@ -66,7 +70,7 @@ export default function ResultsPanel({ sol }) {
     grouped[match].push({ id, stake: val });
   }
 
-  // readable label
+  // Readable label
   const prettyLabel = (id) => {
     if (id.includes("_H") && !id.includes("_HD") && !id.includes("_HA"))
       return "Home Win (1)";
@@ -80,7 +84,7 @@ export default function ResultsPanel({ sol }) {
     return id;
   };
 
-  // winning bets for outcome
+  // Winning bets for outcome
   const winningBetsForOutcome = (omega) => {
     const wins = [];
     for (const [id] of Object.entries(sol.stakes)) {
@@ -88,11 +92,26 @@ export default function ResultsPanel({ sol }) {
       const res = omega[matchIndex];
       if (!res) continue;
 
-      if (id.includes("_H") && res === "H" && !id.includes("_HD") && !id.includes("_HA"))
+      if (
+        id.includes("_H") &&
+        res === "H" &&
+        !id.includes("_HD") &&
+        !id.includes("_HA")
+      )
         wins.push(id);
-      else if (id.includes("_D") && res === "D" && !id.includes("_HD") && !id.includes("_AD"))
+      else if (
+        id.includes("_D") &&
+        res === "D" &&
+        !id.includes("_HD") &&
+        !id.includes("_AD")
+      )
         wins.push(id);
-      else if (id.includes("_A") && res === "A" && !id.includes("_AD") && !id.includes("_HA"))
+      else if (
+        id.includes("_A") &&
+        res === "A" &&
+        !id.includes("_AD") &&
+        !id.includes("_HA")
+      )
         wins.push(id);
       else if (id.includes("_HD") && (res === "H" || res === "D"))
         wins.push(id);
@@ -104,28 +123,50 @@ export default function ResultsPanel({ sol }) {
     return wins;
   };
 
-  // -------------------------------------------
-  // APPLY OUTCOME → UPDATE BANKROLL
-  // -------------------------------------------
-  const applyOutcome = (index) => {
-    if (appliedOutcome !== null) return; // already applied
+  // ============================================
+  // ✅ FIX: APPLY OUTCOME (NO STAKE DEDUCTION)
+  // ============================================
+  const handleApplyOutcome = async (index) => {
+    if (appliedOutcome === index) {
+      // Allow re-clicking same outcome (no-op)
+      return;
+    }
 
     const net = sol.nets[index];
+    const outcome = sol.omega[index];
 
-    adjustBankroll(net); // 🔥 update bankroll globally
+    // Create bet record for history
+    const betRecord = {
+      outcome,
+      net,
+      stakes: sol.stakes,
+      R: sol.R,
+    };
+
+    // ✅ Net already includes stake deduction, so we just ADD it to bankroll
+    await applyOutcome(net, betRecord);
 
     setAppliedOutcome(index);
   };
 
+  // ============================================
+  // RENDER
+  // ============================================
   return (
     <div className="bg-white p-5 rounded-xl shadow-md">
-      <h2 className="text-lg font-semibold mb-3">📊 Betting Plan & Outcomes</h2>
+      <h2 className="text-lg font-semibold mb-3">
+        📊 Betting Plan & Outcomes
+      </h2>
 
-      <p className={`font-medium ${isGood ? "text-green-600" : "text-red-600"} mb-4`}>
+      <p
+        className={`font-medium ${
+          isGood ? "text-green-600" : "text-red-600"
+        } mb-4`}
+      >
         Guaranteed Return (R): {sol.R?.toFixed(3)}
       </p>
 
-      {/* --- Stake summary per match --- */}
+      {/* Stake Summary */}
       <div className="grid md:grid-cols-2 gap-4 mb-6">
         {Object.keys(grouped).map((m) => (
           <div key={m} className="border rounded-lg p-3 bg-gray-50">
@@ -144,10 +185,10 @@ export default function ResultsPanel({ sol }) {
         ))}
       </div>
 
-      {/* --- Outcome simulation (clickable) --- */}
+      {/* Outcome Simulation */}
       <div>
         <h3 className="font-semibold mb-2 text-gray-700">
-          Outcome Simulation (click to apply)
+          Outcome Simulation (click to apply to bankroll)
         </h3>
 
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -158,31 +199,32 @@ export default function ResultsPanel({ sol }) {
             return (
               <div
                 key={i}
-                onClick={() => applyOutcome(i)}
+                onClick={() => handleApplyOutcome(i)}
                 className={`border rounded-lg p-3 text-sm shadow-sm cursor-pointer transition ${
                   applied
                     ? "bg-green-100 border-green-500"
                     : "bg-gray-50 hover:bg-gray-100"
                 }`}
               >
+                {/* Outcome Label */}
                 <div className="font-semibold text-gray-800 mb-1">
-                  Outcome:{" "}
                   <span className="text-blue-600">
                     {w
                       .map(
                         (r, j) =>
-                          `Match ${j + 1}: ${
+                          `M${j + 1}: ${
                             r === "H"
-                              ? "Home Win (1)"
+                              ? "Home (1)"
                               : r === "D"
                               ? "Draw (X)"
-                              : "Away Win (2)"
+                              : "Away (2)"
                           }`
                       )
                       .join(" | ")}
                   </span>
                 </div>
 
+                {/* Applied Badge */}
                 {applied && (
                   <div className="text-green-700 font-bold text-xs mb-1">
                     ✔ Applied to Bankroll
@@ -191,7 +233,9 @@ export default function ResultsPanel({ sol }) {
 
                 {/* Winning Bets */}
                 <div className="mt-1">
-                  <span className="font-medium text-green-700">Winning Bets:</span>
+                  <span className="font-medium text-green-700">
+                    Winning Bets:
+                  </span>
                   <ul className="ml-4 list-disc">
                     {winBets.length > 0 ? (
                       winBets.map((id) => (

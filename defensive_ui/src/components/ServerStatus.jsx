@@ -1,3 +1,4 @@
+// defensive_ui/src/components/ServerStatus.jsx
 import React, { useEffect, useState } from "react";
 import { trackerGet } from "../api/engine";
 import { useBankroll } from "../context/BankrollContext";
@@ -6,7 +7,7 @@ export default function ServerStatus() {
   const [status, setStatus] = useState("checking");
 
   // 🔥 Use GLOBAL bankroll (react state)
-  const { bankroll } = useBankroll();
+  const { bankroll, isLoading } = useBankroll();
 
   async function checkServer() {
     try {
@@ -27,8 +28,13 @@ export default function ServerStatus() {
   if (status === "online") color = "green";
   if (status === "offline") color = "red";
 
+  // ============================================
+  // ✅ FIX: HANDLE NULL BANKROLL SAFELY
+  // ============================================
+  const displayBankroll = bankroll != null ? bankroll.toFixed(2) : "...";
+
   return (
-    <div className="flex items-center gap-2 text-sm mb-3">
+    <div className="flex items-center gap-2 text-sm">
       <div
         style={{
           width: 10,
@@ -42,7 +48,12 @@ export default function ServerStatus() {
 
       {status === "online" && (
         <span>
-          Backend Online 🟢 | Bankroll: <b>{bankroll.toFixed(2)}</b>
+          Backend Online 🟢 | Bankroll:{" "}
+          {isLoading ? (
+            <span className="text-gray-400">Loading...</span>
+          ) : (
+            <b>{displayBankroll}</b>
+          )}
         </span>
       )}
 
