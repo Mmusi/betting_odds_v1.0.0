@@ -1,6 +1,7 @@
 // defensive_ui/src/context/BankrollContext.jsx
+// ✅ Clean bankroll management for new workflow
 import React, { createContext, useContext, useState, useEffect } from "react";
-import { getBankroll, saveBankroll, saveBetRecord } from "../utils/db";
+import { getBankroll, saveBankroll } from "../utils/db";
 
 const BankrollContext = createContext();
 
@@ -29,6 +30,7 @@ export function BankrollProvider({ children }) {
 
   // ============================================
   // ADJUST BANKROLL (+ or -)
+  // Generic method for any adjustment
   // ============================================
   const adjustBankroll = async (amount) => {
     const newBalance = Math.max((bankroll || 0) + amount, 0); // Never negative
@@ -36,13 +38,16 @@ export function BankrollProvider({ children }) {
 
     try {
       await saveBankroll(newBalance);
+      console.log(`💰 Bankroll adjusted by ${amount >= 0 ? '+' : ''}${amount.toFixed(2)} → ${newBalance.toFixed(2)}`);
     } catch (error) {
       console.error("Failed to save bankroll:", error);
+      throw error;
     }
   };
 
   // ============================================
   // MANUALLY SET BANKROLL
+  // Used in settings or import
   // ============================================
   const setBalance = async (value) => {
     const newBalance = Math.max(parseFloat(value) || 0, 0);
@@ -50,34 +55,54 @@ export function BankrollProvider({ children }) {
 
     try {
       await saveBankroll(newBalance);
+      console.log(`💰 Bankroll set to ${newBalance.toFixed(2)}`);
     } catch (error) {
       console.error("Failed to save bankroll:", error);
+      throw error;
     }
   };
 
   // ============================================
-  // DEDUCT STAKE (called on solve)
+  // DEDUCT STAKE
+  // Called ONLY in BetPlacementStep.jsx
   // ============================================
   const deductStake = async (totalStake) => {
+    if (totalStake <= 0) {
+      throw new Error("Invalid stake amount");
+    }
+
+    if (bankroll != null && totalStake > bankroll) {
+      throw new Error("Insufficient bankroll");
+    }
+
+    console.log(`💸 Deducting stake: ${totalStake.toFixed(2)}`);
     await adjustBankroll(-totalStake);
   };
 
   // ============================================
-  // APPLY OUTCOME (called when user selects result)
+  // ADD WINNINGS
+  // Called when recording results or cashing out
   // ============================================
-  const applyOutcome = async (net, betRecord) => {
-    // Net already accounts for stake, so we just add it
-    await adjustBankroll(net);
+  const addWinnings = async (amount) => {
+    if (amount <= 0) {
+      console.warn("No winnings to add");
+      return;
+    }
 
-    // Save to bet history with outcome applied
-    try {
-      await saveBetRecord({
-        ...betRecord,
-        applied: true,
-        finalNet: net,
-      });
-    } catch (error) {
-      console.error("Failed to save bet record:", error);
+    console.log(`💵 Adding winnings: ${amount.toFixed(2)}`);
+    await adjustBankroll(amount);
+  };
+
+  // ============================================
+  // RETURN NET PROFIT/LOSS
+  // Used in MatchResultsEntry
+  // Stake already deducted, so just add the NET
+  // ============================================
+  const recordResult = async (netAmount) => {
+    console.log(`📊 Recording result: ${netAmount >= 0 ? '+' : ''}${netAmount.toFixed(2)}`);
+    
+    if (netAmount !== 0) {
+      await adjustBankroll(netAmount);
     }
   };
 
@@ -89,7 +114,8 @@ export function BankrollProvider({ children }) {
         adjustBankroll,
         setBalance,
         deductStake,
-        applyOutcome,
+        addWinnings,
+        recordResult,
       }}
     >
       {children}

@@ -1,11 +1,11 @@
 // defensive_ui/src/components/SolverForm.jsx
+// ✅ PHASE 1: Calculate stakes WITHOUT deducting bankroll
 import React, { useState, useEffect, useRef } from "react";
 import { solve } from "../api/engine";
 import { useBankroll } from "../context/BankrollContext";
-import { saveBetRecord } from "../utils/db";
 
 export default function SolverForm({ onSolved }) {
-  const { bankroll, isLoading: bankrollLoading, deductStake } = useBankroll();
+  const { bankroll, isLoading: bankrollLoading } = useBankroll();
 
   const [budget, setBudget] = useState(10);
   const [matches, setMatches] = useState([
@@ -107,7 +107,6 @@ export default function SolverForm({ onSolved }) {
       return false;
     }
 
-    // ✅ NULL SAFETY: Check if bankroll is loaded
     if (bankroll != null && budgetNum > bankroll) {
       alert(`❌ Budget (${budgetNum}) exceeds available bankroll (${bankroll.toFixed(2)})`);
       return false;
@@ -134,7 +133,7 @@ export default function SolverForm({ onSolved }) {
   };
 
   // ============================================
-  // SOLVE & DEDUCT STAKE (ONCE)
+  // ✅ SOLVE WITHOUT DEDUCTING BANKROLL
   // ============================================
   const handleSolve = async () => {
     if (!validateInputs()) return;
@@ -155,34 +154,9 @@ export default function SolverForm({ onSolved }) {
       // Call solver
       const res = await solve(bets, parseFloat(budget), 1.0, matches.length);
 
-      // ============================================
-      // ✅ FIX: DEDUCT STAKE ONLY ONCE (HERE)
-      // ============================================
-      if (res?.stakes && typeof res.stakes === "object") {
-        const totalStake = Object.values(res.stakes).reduce((sum, v) => sum + v, 0);
-
-        if (totalStake > 0) {
-          await deductStake(totalStake);
-          console.log("💸 Deducted from bankroll:", totalStake);
-        }
-      }
-
-      // Save bet record (unapplied)
-      try {
-        await saveBetRecord({
-          matches: matches.map(m => ({ ...m })),
-          stakes: res.stakes || {},
-          outcomes: res.omega || [],
-          nets: res.nets || [],
-          R: res.R,
-          applied: false,
-        });
-      } catch (err) {
-        console.error("Failed to save bet record:", err);
-      }
-
-      // Pass solution to parent (ResultsPanel) WITH MATCHES
-      onSolved(res, bets, matches);
+      // ✅ NO BANKROLL DEDUCTION HERE
+      // Just pass solution to parent (AI Advisor step)
+      onSolved(res, bets, matches, parseFloat(budget));
 
     } catch (err) {
       alert("❌ Error: " + err.message);
@@ -203,13 +177,16 @@ export default function SolverForm({ onSolved }) {
     );
   }
 
-  // ✅ NULL SAFETY: Default to 0 if bankroll still null
   const safeBankroll = bankroll ?? 0;
   const displayBankroll = safeBankroll.toFixed(2);
 
   return (
     <div className="bg-white p-5 rounded-xl shadow-md mb-6">
-      <h2 className="text-lg font-semibold mb-4">⚙️ Betting Solver</h2>
+      <h2 className="text-lg font-semibold mb-4">⚙️ Step 1: Calculate Stakes</h2>
+      
+      <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm text-blue-800">
+        💡 <b>Calculate stakes first</b> — bankroll is only deducted when you place bets
+      </div>
 
       {/* Budget & Actions */}
       <div className="flex flex-wrap items-center gap-3 mb-5">
@@ -238,7 +215,7 @@ export default function SolverForm({ onSolved }) {
           disabled={loading || parseFloat(budget) > safeBankroll}
           className="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded shadow-md transition disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
-          {loading ? "Calculating..." : "⚡ Compute Stakes"}
+          {loading ? "Calculating..." : "⚡ Calculate Stakes"}
         </button>
       </div>
 

@@ -1,4 +1,5 @@
 // defensive_ui/src/components/MatchResultsEntry.jsx
+// ✅ Updated to work with new workflow (stake already deducted)
 import React, { useState, useEffect } from "react";
 import {
   getPlacedUnresolvedBets,
@@ -18,7 +19,7 @@ export default function MatchResultsEntry() {
   const [cashoutAmount, setCashoutAmount] = useState("");
 
   const toast = useToast();
-  const { adjustBankroll } = useBankroll();
+  const { addWinnings } = useBankroll();
 
   // Load unresolved bet records
   useEffect(() => {
@@ -57,7 +58,8 @@ export default function MatchResultsEntry() {
   };
 
   // ----------------------------------------------
-  // SUBMIT MATCH RESULTS
+  // ✅ SUBMIT MATCH RESULTS
+  // Stakes already deducted, so we just add NET back
   // ----------------------------------------------
   const handleSubmitResults = async () => {
     if (!selectedBet) return;
@@ -70,15 +72,25 @@ export default function MatchResultsEntry() {
 
     setSubmitting(true);
     try {
+      // Calculate actual net from results
       const actualNet = await recordMatchResults(selectedBet.id, results);
 
-      await adjustBankroll(actualNet);
-
-      toast.success(
-        `Results recorded! Net: ${actualNet >= 0 ? "+" : ""}${actualNet.toFixed(
-          2
-        )}`
-      );
+      // ✅ Stakes were already deducted, so we add back the NET
+      // Net = Total Payout - Total Stake
+      // If positive: Add winnings
+      // If negative: Already lost (do nothing, stake was deducted)
+      
+      if (actualNet > 0) {
+        // We won! Add payout
+        await addWinnings(actualNet);
+        toast.success(`🎉 Win! +${actualNet.toFixed(2)} added to bankroll`);
+      } else if (actualNet < 0) {
+        // We lost (stake already gone)
+        toast.error(`😔 Loss: ${actualNet.toFixed(2)}`);
+      } else {
+        // Break even
+        toast.info("Break even - no net change");
+      }
 
       await loadUnresolvedBets();
       setSelectedBet(null);
@@ -92,7 +104,8 @@ export default function MatchResultsEntry() {
   };
 
   // ----------------------------------------------
-  // CASHOUT
+  // ✅ CASHOUT (Early exit)
+  // Stakes already deducted, so cashout = add back partial amount
   // ----------------------------------------------
   const handleCashout = async () => {
     if (!selectedBet || !cashoutAmount) {
@@ -106,11 +119,16 @@ export default function MatchResultsEntry() {
       return;
     }
 
+    const totalStake = Object.values(selectedBet.stakes || {}).reduce(
+      (sum, s) => sum + s,
+      0
+    );
+
     if (
       !confirm(
-        `Cashout bet for ${amount.toFixed(
+        `Cashout for ${amount.toFixed(2)}?\n\nOriginal stake: ${totalStake.toFixed(
           2
-        )}?\n\nThis will close the bet and update your bankroll.`
+        )}\nNet: ${amount >= 0 ? "+" : ""}${(amount - totalStake).toFixed(2)}`
       )
     ) {
       return;
@@ -118,15 +136,18 @@ export default function MatchResultsEntry() {
 
     setSubmitting(true);
     try {
+      // Cashout returns NET (cashout amount - stake)
       const netFromCashout = await cashoutBet(selectedBet.id, amount);
 
-      await adjustBankroll(netFromCashout);
-
-      toast.success(
-        `Bet cashed out! Net: ${
-          netFromCashout >= 0 ? "+" : ""
-        }${netFromCashout.toFixed(2)}`
-      );
+      // ✅ Add back the NET amount
+      if (netFromCashout > 0) {
+        await addWinnings(netFromCashout);
+        toast.success(`💰 Cashed out! +${netFromCashout.toFixed(2)}`);
+      } else if (netFromCashout < 0) {
+        toast.warning(`Cashed out at loss: ${netFromCashout.toFixed(2)}`);
+      } else {
+        toast.info("Cashed out break-even");
+      }
 
       await loadUnresolvedBets();
       setSelectedBet(null);
@@ -153,12 +174,18 @@ export default function MatchResultsEntry() {
 
   return (
     <div className="bg-white p-5 rounded-xl shadow-md">
-      <h2 className="text-lg font-semibold mb-4">🎯 Record Match Results</h2>
+      <h2 className="text-lg font-semibold mb-4">🎯 Step 4: Record Match Results</h2>
 
       {unresolvedBets.length === 0 ? (
-        <p className="text-gray-500 text-center py-8">
-          No pending bets. All resolved! 🎉
-        </p>
+        <div className="text-center py-12">
+          <div className="text-6xl mb-4">🎉</div>
+          <p className="text-xl font-semibold text-gray-700 mb-2">
+            All bets resolved!
+          </p>
+          <p className="text-gray-500">
+            No pending bets. Place new bets in the Solver tab.
+          </p>
+        </div>
       ) : (
         <div className="grid md:grid-cols-2 gap-4">
           {/* Left column – Bets list */}
@@ -168,32 +195,37 @@ export default function MatchResultsEntry() {
             </h3>
 
             <div className="space-y-2">
-              {unresolvedBets.map((bet) => (
-                <div
-                  key={bet.id}
-                  onClick={() => handleBetSelect(bet)}
-                  className={`border rounded p-3 cursor-pointer transition ${
-                    selectedBet?.id === bet.id
-                      ? "bg-blue-100 border-blue-500"
-                      : "bg-white hover:bg-gray-100"
-                  }`}
-                >
-                  <div className="text-xs text-gray-500 mb-1">
-                    {new Date(bet.timestamp).toLocaleString()}
-                  </div>
+              {unresolvedBets.map((bet) => {
+                const totalStake = Object.values(bet.stakes || {}).reduce(
+                  (sum, s) => sum + s,
+                  0
+                );
 
-                  <div className="text-sm font-medium">
-                    {bet.matches?.map((m) => m.name || m.id).join(" • ")}
-                  </div>
+                return (
+                  <div
+                    key={bet.id}
+                    onClick={() => handleBetSelect(bet)}
+                    className={`border rounded p-3 cursor-pointer transition ${
+                      selectedBet?.id === bet.id
+                        ? "bg-blue-100 border-blue-500"
+                        : "bg-white hover:bg-gray-100"
+                    }`}
+                  >
+                    <div className="text-xs text-gray-500 mb-1">
+                      {new Date(bet.timestamp).toLocaleString()}
+                    </div>
 
-                  <div className="text-xs text-gray-600 mt-1">
-                    Total stake:{" "}
-                    {Object.values(bet.stakes || {})
-                      .reduce((s, x) => s + x, 0)
-                      .toFixed(2)}
+                    <div className="text-sm font-medium mb-1">
+                      {bet.matches?.map((m) => m.name || m.id).join(" • ")}
+                    </div>
+
+                    <div className="flex justify-between text-xs text-gray-600">
+                      <span>Stake: {totalStake.toFixed(2)}</span>
+                      <span>R: {bet.R?.toFixed(3)}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -207,15 +239,15 @@ export default function MatchResultsEntry() {
               <div>
                 <div className="flex justify-between items-center mb-3">
                   <h3 className="font-medium">
-                    {cashoutMode ? "Cashout Bet" : "Enter Results"}
+                    {cashoutMode ? "💰 Cashout" : "📝 Enter Results"}
                   </h3>
 
                   <button
                     onClick={() => setCashoutMode(!cashoutMode)}
-                    className={`text-sm px-3 py-1 rounded ${
+                    className={`text-sm px-3 py-1 rounded transition ${
                       cashoutMode
-                        ? "bg-gray-200 text-gray-700"
-                        : "bg-orange-100 text-orange-700"
+                        ? "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                        : "bg-orange-100 text-orange-700 hover:bg-orange-200"
                     }`}
                   >
                     {cashoutMode ? "📋 Results" : "💰 Cashout"}
@@ -228,7 +260,7 @@ export default function MatchResultsEntry() {
                   /////////////////////////////////////
                   <div>
                     <p className="text-sm text-gray-600 mb-3">
-                      Enter the bookmaker cashout amount:
+                      Enter bookmaker cashout offer:
                     </p>
 
                     <input
@@ -242,7 +274,7 @@ export default function MatchResultsEntry() {
                     />
 
                     <div className="text-xs text-gray-500 mb-4">
-                      Total stake:{" "}
+                      Original stake:{" "}
                       {Object.values(selectedBet.stakes || {})
                         .reduce((s, x) => s + x, 0)
                         .toFixed(2)}
