@@ -11,6 +11,7 @@ export default function SmartPredictions({ matches, onApplyRecommendation }) {
   const toast = useToast();
 
   useEffect(() => {
+    console.log("SmartPredictions received matches:", matches); // DEBUG
     if (matches && matches.length > 0) {
       analyzeMatches();
     }
@@ -19,6 +20,8 @@ export default function SmartPredictions({ matches, onApplyRecommendation }) {
   const analyzeMatches = async () => {
     setLoading(true);
     try {
+      console.log("Sending to API:", matches); // DEBUG
+      
       // Get recommendations
       const response = await fetch(`${API_BASE}/recommend_combos`, {
         method: "POST",
@@ -38,11 +41,16 @@ export default function SmartPredictions({ matches, onApplyRecommendation }) {
         }),
       });
 
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+
       const data = await response.json();
+      console.log("API response:", data); // DEBUG
       setRecommendations(data.recommendations || []);
     } catch (err) {
       console.error("Failed to get recommendations:", err);
-      toast.error("Failed to analyze matches");
+      toast.error("Failed to analyze matches: " + err.message);
     } finally {
       setLoading(false);
     }
@@ -59,9 +67,16 @@ export default function SmartPredictions({ matches, onApplyRecommendation }) {
   if (!matches || matches.length === 0) {
     return (
       <div className="bg-white p-5 rounded-xl shadow-md">
-        <p className="text-gray-500 text-center">
-          Enter match odds to get smart predictions
-        </p>
+        <h2 className="text-lg font-semibold mb-4">🤖 AI Predictions</h2>
+        <div className="text-center py-8">
+          <div className="text-6xl mb-4">🎯</div>
+          <p className="text-gray-600 mb-2">
+            No matches to analyze yet
+          </p>
+          <p className="text-sm text-gray-500">
+            Go to the Solver tab and enter match odds, then click "Compute Stakes"
+          </p>
+        </div>
       </div>
     );
   }

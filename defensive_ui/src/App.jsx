@@ -17,6 +17,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("solver");
 
   const handleSolved = (solution, bets, matches) => {
+    console.log("App.jsx handleSolved called with:", { solution, bets, matches }); // DEBUG
     setSol(solution);
     setCurrentMatches(matches); // Store matches for predictions
   };

@@ -6,12 +6,14 @@ from defensive_engine_full import (
 import json
 from flask_cors import CORS
 
+
+# Check top of api_server.py has:
 from prediction_engine import (
-    analyze_match_odds, 
-    recommend_best_combos, 
-    create_accumulator_bet
+    analyze_match_odds, create_accumulator_bet, recommend_best_combos,
+    highlight_winning_bets, solve_with_accumulator
 )
 
+# If it fails, check prediction_engine.py is in same folder
 
 app = Flask(__name__)
 CORS(app)  # ✅ allows requests from your React frontend
