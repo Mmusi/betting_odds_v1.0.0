@@ -6,6 +6,12 @@ from defensive_engine_full import (
 import json
 from flask_cors import CORS
 
+from prediction_engine import (
+    analyze_match_odds, 
+    recommend_best_combos, 
+    create_accumulator_bet
+)
+
 
 app = Flask(__name__)
 CORS(app)  # ✅ allows requests from your React frontend
@@ -60,6 +66,35 @@ def api_tracker():
         "bankroll": GLOBAL_TRACKER.bankroll,
         "log": GLOBAL_TRACKER.log.to_dict(orient="records")
     })
+
+@app.route("/api/analyze_odds", methods=["POST"])
+def api_analyze_odds():
+    data = request.json
+    result = analyze_match_odds(
+        float(data["home"]), 
+        float(data["draw"]), 
+        float(data["away"])
+    )
+    return jsonify(result)
+
+@app.route("/api/recommend_combos", methods=["POST"])
+def api_recommend_combos():
+    data = request.json
+    recs = recommend_best_combos(
+        data["matches"], 
+        float(data["budget"]), 
+        data.get("risk_tolerance", "medium")
+    )
+    return jsonify({"recommendations": recs})
+
+@app.route("/api/create_accumulator", methods=["POST"])
+def api_create_accumulator():
+    data = request.json
+    accum = create_accumulator_bet(
+        data["matches"], 
+        data["selections"]
+    )
+    return jsonify(accum)
 
 if __name__ == "__main__":
     app.run(port=5001, debug=False)
