@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { solve } from "../api/engine";
 import { useBankroll } from "../context/BankrollContext";
-import { saveBetRecord } from "../utils/db";
+import { saveBetRecord, placeBet, getFromStore } from "../utils/db";
 
 export default function SolverForm({ onSolved }) {
   const { bankroll, isLoading: bankrollLoading, deductStake } = useBankroll();
@@ -13,18 +13,21 @@ export default function SolverForm({ onSolved }) {
   ]);
   const [loading, setLoading] = useState(false);
 
+  const [currentBetId, setCurrentBetId] = useState(null);
+  const [betPlaced, setBetPlaced] = useState(false);
+
   const lastFocused = useRef({ matchIndex: 0, field: "home" });
   const [flashField, setFlashField] = useState(null);
 
-  // ============================================
+  // ============================================================
   // RECEIVE ODDS FROM POPUP
-  // ============================================
+  // ============================================================
   useEffect(() => {
     const handleMsg = (event) => {
       const data = event.data;
       if (!data) return;
-      const { type } = data;
-      if (type !== "betwayOdd" && type !== "betwayOddsBatch") return;
+
+      if (data.type !== "betwayOdd" && data.type !== "betwayOddsBatch") return;
 
       const { matchIndex } = lastFocused.current;
 
@@ -32,26 +35,25 @@ export default function SolverForm({ onSolved }) {
         const updated = [...prev];
         if (!updated[matchIndex]) return prev;
 
-        if (type === "betwayOdd") {
+        if (data.type === "betwayOdd") {
           const field = lastFocused.current.field;
-          updated[matchIndex] = {
-            ...updated[matchIndex],
-            [field]: data.value,
-          };
+          updated[matchIndex] = { ...updated[matchIndex], [field]: data.value };
+
           setFlashField(`${matchIndex}-${field}`);
           setTimeout(() => setFlashField(null), 800);
+
           return updated;
         }
 
-        if (type === "betwayOddsBatch") {
+        if (data.type === "betwayOddsBatch") {
           const batch = data.odds || {};
           Object.entries(batch).forEach(([key, val]) => {
-            if (val !== "" && val != null) {
-              updated[matchIndex][key] = val;
-            }
+            if (val !== "" && val != null) updated[matchIndex][key] = val;
           });
+
           setFlashField(`batch-${matchIndex}`);
           setTimeout(() => setFlashField(null), 800);
+
           return updated;
         }
 
@@ -67,9 +69,9 @@ export default function SolverForm({ onSolved }) {
     lastFocused.current = { matchIndex, field };
   };
 
-  // ============================================
+  // ============================================================
   // MATCH MANAGEMENT
-  // ============================================
+  // ============================================================
   const addMatch = () => {
     setMatches((prev) => [
       ...prev,
@@ -96,27 +98,19 @@ export default function SolverForm({ onSolved }) {
     );
   };
 
-  // ============================================
+  // ============================================================
   // VALIDATE INPUTS
-  // ============================================
+  // ============================================================
   const validateInputs = () => {
-    const budgetNum = parseFloat(budget);
-
-    if (isNaN(budgetNum) || budgetNum <= 0) {
+    if (parseFloat(budget) <= 0) {
       alert("❌ Budget must be greater than 0");
-      return false;
-    }
-
-    // ✅ NULL SAFETY: Check if bankroll is loaded
-    if (bankroll != null && budgetNum > bankroll) {
-      alert(`❌ Budget (${budgetNum}) exceeds available bankroll (${bankroll.toFixed(2)})`);
       return false;
     }
 
     for (const match of matches) {
       const odds = [match.home, match.draw, match.away, match.hd, match.ad, match.ha];
       const hasAnyOdds = odds.some(o => o && parseFloat(o) > 0);
-      
+
       if (!hasAnyOdds) {
         alert(`❌ Match "${match.name || match.id}" has no odds entered`);
         return false;
@@ -133,15 +127,14 @@ export default function SolverForm({ onSolved }) {
     return true;
   };
 
-  // ============================================
-  // SOLVE & DEDUCT STAKE (ONCE)
-  // ============================================
+  // ============================================================
+  // SOLVE (SAVE ONLY — DO NOT DEDUCT)
+  // ============================================================
   const handleSolve = async () => {
     if (!validateInputs()) return;
 
     setLoading(true);
     try {
-      // Build bet array
       const bets = [];
       matches.forEach((m, i) => {
         if (m.home) bets.push({ id: `${m.id}_H`, match_index: i, covered_results: ["H"], odds: parseFloat(m.home), min_stake: 1.0 });
@@ -152,38 +145,23 @@ export default function SolverForm({ onSolved }) {
         if (m.ha) bets.push({ id: `${m.id}_HA`, match_index: i, covered_results: ["H","A"], odds: parseFloat(m.ha), min_stake: 1.0 });
       });
 
-      // Call solver
       const res = await solve(bets, parseFloat(budget), 1.0, matches.length);
 
-      // ============================================
-      // ✅ FIX: DEDUCT STAKE ONLY ONCE (HERE)
-      // ============================================
-      if (res?.stakes && typeof res.stakes === "object") {
-        const totalStake = Object.values(res.stakes).reduce((sum, v) => sum + v, 0);
+      // SAVE RECORD ONLY — NOT DEDUCTING YET
+      const betId = await saveBetRecord({
+        matches: matches.map(m => ({ ...m })),
+        stakes: res.stakes || {},
+        outcomes: res.omega || [],
+        nets: res.nets || [],
+        payouts: res.payouts || [],
+        R: res.R,
+        status: "calculated",
+      });
 
-        if (totalStake > 0) {
-          await deductStake(totalStake);
-          console.log("💸 Deducted from bankroll:", totalStake);
-        }
-      }
+      setCurrentBetId(betId);
+      setBetPlaced(false);
 
-      // Save bet record (unapplied)
-      try {
-        await saveBetRecord({
-          matches: matches.map(m => ({ ...m })),
-          stakes: res.stakes || {},
-          outcomes: res.omega || [],
-          nets: res.nets || [],
-          R: res.R,
-          applied: false,
-        });
-      } catch (err) {
-        console.error("Failed to save bet record:", err);
-      }
-
-      // Pass solution to parent (ResultsPanel)
       onSolved(res, bets);
-
     } catch (err) {
       alert("❌ Error: " + err.message);
       console.error(err);
@@ -192,9 +170,55 @@ export default function SolverForm({ onSolved }) {
     }
   };
 
-  // ============================================
+  // ============================================================
+  // PLACE BET (DEDUCT + MARK AS PLACED)
+  // ============================================================
+  const handlePlaceBet = async () => {
+    if (!currentBetId) {
+      alert("❌ No bet to place. Compute stakes first!");
+      return;
+    }
+
+    if (betPlaced) {
+      alert("✅ This bet has already been placed!");
+      return;
+    }
+
+    try {
+      const bet = await getFromStore("betHistory", currentBetId);
+      if (!bet) throw new Error("Bet record not found");
+
+      const totalStake = Object.values(bet.stakes || {}).reduce((sum, v) => sum + v, 0);
+
+      if (!confirm(`Place bet with total stake: ${totalStake.toFixed(2)}?\n\nThis will deduct from your bankroll.`)) {
+        return;
+      }
+
+      await deductStake(totalStake);
+      await placeBet(currentBetId);
+
+      setBetPlaced(true);
+      alert(`✅ Bet placed! Stake: ${totalStake.toFixed(2)} deducted.`);
+    } catch (err) {
+      alert("❌ Failed to place bet: " + err.message);
+      console.error(err);
+    }
+  };
+
+  // ============================================================
+  // RESET
+  // ============================================================
+  const handleReset = () => {
+    setMatches([{ id: "M1", name: "", home: "", draw: "", away: "", hd: "", ad: "", ha: "" }]);
+    setBudget(10);
+    setCurrentBetId(null);
+    setBetPlaced(false);
+    onSolved(null);
+  };
+
+  // ============================================================
   // RENDER
-  // ============================================
+  // ============================================================
   if (bankrollLoading) {
     return (
       <div className="bg-white p-5 rounded-xl shadow-md mb-6 text-center">
@@ -202,10 +226,6 @@ export default function SolverForm({ onSolved }) {
       </div>
     );
   }
-
-  // ✅ NULL SAFETY: Default to 0 if bankroll still null
-  const safeBankroll = bankroll ?? 0;
-  const displayBankroll = safeBankroll.toFixed(2);
 
   return (
     <div className="bg-white p-5 rounded-xl shadow-md mb-6">
@@ -220,10 +240,10 @@ export default function SolverForm({ onSolved }) {
           onChange={(e) => setBudget(e.target.value)}
           className="border px-3 py-2 rounded w-32"
           min="1"
-          max={safeBankroll}
+          max={bankroll}
         />
         <span className="text-sm text-gray-500">
-          (Available: {displayBankroll})
+          (Available: {bankroll?.toFixed(2) || "0.00"})
         </span>
 
         <button
@@ -235,10 +255,26 @@ export default function SolverForm({ onSolved }) {
 
         <button
           onClick={handleSolve}
-          disabled={loading || parseFloat(budget) > safeBankroll}
+          disabled={loading || budget > bankroll}
           className="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded shadow-md transition disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
           {loading ? "Calculating..." : "⚡ Compute Stakes"}
+        </button>
+
+        {currentBetId && (
+          <button
+            onClick={handlePlaceBet}
+            className="bg-purple-600 hover:bg-purple-700 text-white px-5 py-2 rounded shadow-md transition"
+          >
+            🎯 Place Bet
+          </button>
+        )}
+
+        <button
+          onClick={handleReset}
+          className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded shadow-md transition"
+        >
+          ♻ Reset
         </button>
       </div>
 
@@ -255,11 +291,8 @@ export default function SolverForm({ onSolved }) {
               </button>
             )}
 
-            <h3 className="font-medium mb-3">
-              {m.name || `Match ${i + 1}`}
-            </h3>
+            <h3 className="font-medium mb-3">{m.name || `Match ${i + 1}`}</h3>
 
-            {/* Team Name Input */}
             <input
               placeholder="Team names (e.g., Arsenal vs Chelsea)"
               value={m.name}
@@ -267,7 +300,7 @@ export default function SolverForm({ onSolved }) {
               className="w-full border p-2 rounded mb-3 text-sm"
             />
 
-            {/* Odds Grid */}
+            {/* Odds */}
             <div className="grid grid-cols-6 gap-2 text-sm">
               {[
                 ["home", "Home (1)"],

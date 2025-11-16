@@ -2,9 +2,11 @@
 // IndexedDB wrapper for persistent storage
 
 const DB_NAME = "DefensiveBettingDB";
-const DB_VERSION = 1;
+const DB_VERSION = 2; // ⬆️ Incremented for schema changes
 
-// Initialize database with stores
+// ============================================
+// INITIALIZATION
+// ============================================
 export const initDB = () => {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, DB_VERSION);
@@ -20,7 +22,7 @@ export const initDB = () => {
         db.createObjectStore("bankroll", { keyPath: "id" });
       }
 
-      // Bet history store with auto-increment ID
+      // Bet history store with auto-increment ID + NEW INDEXES
       if (!db.objectStoreNames.contains("betHistory")) {
         const betStore = db.createObjectStore("betHistory", {
           keyPath: "id",
@@ -28,18 +30,26 @@ export const initDB = () => {
         });
         betStore.createIndex("timestamp", "timestamp", { unique: false });
         betStore.createIndex("applied", "applied", { unique: false });
+        betStore.createIndex("resolved", "resolved", { unique: false });
       }
 
       // Settings store
       if (!db.objectStoreNames.contains("settings")) {
         db.createObjectStore("settings", { keyPath: "id" });
       }
+
+      // Statistics store
+      if (!db.objectStoreNames.contains("statistics")) {
+        db.createObjectStore("statistics", { keyPath: "id" });
+      }
     };
   });
 };
 
-// Generic get operation
-const getFromStore = async (storeName, key) => {
+// ============================================
+// GENERIC OPERATIONS (EXPORTED)
+// ============================================
+export const getFromStore = async (storeName, key) => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, "readonly");
@@ -51,8 +61,7 @@ const getFromStore = async (storeName, key) => {
   });
 };
 
-// Generic put operation
-const putToStore = async (storeName, data) => {
+export const putToStore = async (storeName, data) => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, "readwrite");
@@ -64,8 +73,7 @@ const putToStore = async (storeName, data) => {
   });
 };
 
-// Generic delete operation
-const deleteFromStore = async (storeName, key) => {
+export const deleteFromStore = async (storeName, key) => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, "readwrite");
@@ -77,8 +85,7 @@ const deleteFromStore = async (storeName, key) => {
   });
 };
 
-// Get all records from a store
-const getAllFromStore = async (storeName) => {
+export const getAllFromStore = async (storeName) => {
   const db = await initDB();
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(storeName, "readonly");
@@ -113,7 +120,12 @@ export const saveBetRecord = async (record) => {
   return await putToStore("betHistory", {
     ...record,
     timestamp: new Date().toISOString(),
+    status: record.status || "calculated",
     applied: false,
+    resolved: false,
+    matchResults: null,
+    actualNet: null,
+    cashoutAmount: null,
   });
 };
 
@@ -142,10 +154,219 @@ export const getUnappliedBets = async () => {
     const transaction = db.transaction("betHistory", "readonly");
     const store = transaction.objectStore("betHistory");
     const index = store.index("applied");
-    const request = index.getAll(false); // Get all where applied = false
+    const request = index.getAll(false);
 
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
+  });
+};
+
+// Get placed but unresolved bets (waiting for match results)
+export const getPlacedUnresolvedBets = async () => {
+  const allBets = await getAllBets();
+  return allBets.filter((bet) => bet.status === "placed" && !bet.resolved);
+};
+
+// Mark bet as placed
+export const placeBet = async (betId) => {
+  await updateBetRecord(betId, {
+    status: "placed",
+    placedAt: new Date().toISOString(),
+  });
+};
+
+// Cashout a bet
+export const cashoutBet = async (betId, cashoutAmount) => {
+  const bet = await getFromStore("betHistory", betId);
+  if (!bet) throw new Error("Bet not found");
+
+  // Calculate net from cashout (cashout - total stake)
+  const totalStake = Object.values(bet.stakes || {}).reduce(
+    (sum, s) => sum + s,
+    0
+  );
+  const netFromCashout = cashoutAmount - totalStake;
+
+  await updateBetRecord(betId, {
+    status: "cashed_out",
+    resolved: true,
+    cashoutAmount,
+    actualNet: netFromCashout,
+    cashedOutAt: new Date().toISOString(),
+  });
+
+  return netFromCashout;
+};
+
+// Record match results for a bet
+export const recordMatchResults = async (betId, matchResults) => {
+  const bet = await getFromStore("betHistory", betId);
+  if (!bet) throw new Error("Bet not found");
+
+  // Calculate actual net based on results
+  let actualNet = -Object.values(bet.stakes || {}).reduce(
+    (sum, s) => sum + s,
+    0
+  ); // Start with -totalStake
+
+  for (const [betKey, stakeAmount] of Object.entries(bet.stakes || {})) {
+    const matchIndex = parseInt(betKey.split("_")[0].replace("M", "")) - 1;
+    const actualResult = matchResults[matchIndex];
+
+    // Check if bet won
+    const wonBet = checkIfBetWon(betKey, actualResult);
+    if (wonBet) {
+      const odds = getBetOdds(bet, betKey);
+      actualNet += stakeAmount * odds;
+    }
+  }
+
+  await updateBetRecord(betId, {
+    status: "resolved",
+    resolved: true,
+    matchResults,
+    actualNet,
+  });
+
+  return actualNet;
+};
+
+// Helper: Check if bet won based on result
+const checkIfBetWon = (betKey, result) => {
+  if (!result) return false;
+
+  if (
+    betKey.includes("_H") &&
+    !betKey.includes("_HD") &&
+    !betKey.includes("_HA")
+  )
+    return result === "H";
+  if (
+    betKey.includes("_D") &&
+    !betKey.includes("_HD") &&
+    !betKey.includes("_AD")
+  )
+    return result === "D";
+  if (
+    betKey.includes("_A") &&
+    !betKey.includes("_AD") &&
+    !betKey.includes("_HA")
+  )
+    return result === "A";
+  if (betKey.includes("_HD")) return result === "H" || result === "D";
+  if (betKey.includes("_AD")) return result === "A" || result === "D";
+  if (betKey.includes("_HA")) return result === "H" || result === "A";
+
+  return false;
+};
+
+// Helper: Get odds for a bet
+const getBetOdds = (bet, betKey) => {
+  if (!bet.matches) return 1.0;
+
+  const matchIndex = parseInt(betKey.split("_")[0].replace("M", "")) - 1;
+  const match = bet.matches[matchIndex];
+  if (!match) return 1.0;
+
+  if (
+    betKey.includes("_H") &&
+    !betKey.includes("_HD") &&
+    !betKey.includes("_HA")
+  )
+    return parseFloat(match.home) || 1.0;
+  if (
+    betKey.includes("_D") &&
+    !betKey.includes("_HD") &&
+    !betKey.includes("_AD")
+  )
+    return parseFloat(match.draw) || 1.0;
+  if (
+    betKey.includes("_A") &&
+    !betKey.includes("_AD") &&
+    !betKey.includes("_HA")
+  )
+    return parseFloat(match.away) || 1.0;
+  if (betKey.includes("_HD")) return parseFloat(match.hd) || 1.0;
+  if (betKey.includes("_AD")) return parseFloat(match.ad) || 1.0;
+  if (betKey.includes("_HA")) return parseFloat(match.ha) || 1.0;
+
+  return 1.0;
+};
+
+// ============================================
+// STATISTICS API
+// ============================================
+export const calculateStatistics = async () => {
+  const bets = await getAllBets();
+  const resolvedBets = bets.filter((b) => b.resolved);
+
+  const totalBets = bets.length;
+  const resolvedCount = resolvedBets.length;
+  const unresolvedCount = totalBets - resolvedCount;
+
+  const totalWagered = resolvedBets.reduce((sum, b) => {
+    return sum + Object.values(b.stakes || {}).reduce((s, val) => s + val, 0);
+  }, 0);
+
+  const totalReturns = resolvedBets.reduce(
+    (sum, b) => sum + (b.actualNet || 0),
+    0
+  );
+  const totalProfit = totalReturns;
+
+  const winningBets = resolvedBets.filter((b) => (b.actualNet || 0) > 0).length;
+  const losingBets = resolvedBets.filter((b) => (b.actualNet || 0) < 0).length;
+  const breakEvenBets = resolvedBets.filter(
+    (b) => (b.actualNet || 0) === 0
+  ).length;
+
+  // Separate cashout stats
+  const cashedOutBets = resolvedBets.filter((b) => b.status === "cashed_out");
+  const cashedOutCount = cashedOutBets.length;
+  const cashedOutProfit = cashedOutBets.reduce(
+    (sum, b) => sum + (b.actualNet || 0),
+    0
+  );
+
+  const winRate = resolvedCount > 0 ? (winningBets / resolvedCount) * 100 : 0;
+  const roi = totalWagered > 0 ? (totalProfit / totalWagered) * 100 : 0;
+
+  const avgProfit = resolvedCount > 0 ? totalProfit / resolvedCount : 0;
+  const biggestWin = resolvedBets.reduce(
+    (max, b) => Math.max(max, b.actualNet || 0),
+    0
+  );
+  const biggestLoss = resolvedBets.reduce(
+    (min, b) => Math.min(min, b.actualNet || 0),
+    0
+  );
+
+  return {
+    totalBets,
+    resolvedCount,
+    unresolvedCount,
+    totalWagered,
+    totalReturns,
+    totalProfit,
+    winningBets,
+    losingBets,
+    breakEvenBets,
+    cashedOutCount,
+    cashedOutProfit,
+    winRate,
+    roi,
+    avgProfit,
+    biggestWin,
+    biggestLoss,
+  };
+};
+
+// Get bets by date range
+export const getBetsByDateRange = async (startDate, endDate) => {
+  const allBets = await getAllBets();
+  return allBets.filter((bet) => {
+    const betDate = new Date(bet.timestamp);
+    return betDate >= startDate && betDate <= endDate;
   });
 };
 

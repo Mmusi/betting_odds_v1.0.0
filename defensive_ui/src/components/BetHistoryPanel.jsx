@@ -5,7 +5,7 @@ import { getAllBets, deleteBetRecord, exportData, clearAllData } from "../utils/
 export default function BetHistoryPanel() {
   const [bets, setBets] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState("all"); // all, applied, unapplied
+  const [filter, setFilter] = useState("all"); // all, pending, recorded
 
   // ============================================
   // LOAD HISTORY
@@ -79,10 +79,10 @@ export default function BetHistoryPanel() {
   // ============================================
   // FILTER BETS
   // ============================================
-  const filteredBets = bets.filter((b) => {
-    if (filter === "applied") return b.applied;
-    if (filter === "unapplied") return !b.applied;
-    return true;
+  const filteredBets = bets.filter((bet) => {
+    if (filter === "recorded") return bet.resolved; // Recorded = resolved (results entered)
+    if (filter === "pending") return !bet.resolved; // Pending = not resolved yet
+    return true; // all
   });
 
   // ============================================
@@ -119,7 +119,7 @@ export default function BetHistoryPanel() {
 
       {/* Filter Tabs */}
       <div className="flex gap-2 mb-4 border-b">
-        {["all", "applied", "unapplied"].map((f) => (
+        {["all", "pending", "recorded"].map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -129,13 +129,9 @@ export default function BetHistoryPanel() {
                 : "text-gray-500 hover:text-gray-700"
             }`}
           >
-            {f.charAt(0).toUpperCase() + f.slice(1)} (
-            {
-              bets.filter((b) =>
-                f === "all" ? true : f === "applied" ? b.applied : !b.applied
-              ).length
-            }
-            )
+            {f === "all" && `All (${bets.length})`}
+            {f === "pending" && `⏳ Pending (${bets.filter((b) => !b.resolved).length})`}
+            {f === "recorded" && `✅ Recorded (${bets.filter((b) => b.resolved).length})`}
           </button>
         ))}
       </div>
@@ -191,20 +187,39 @@ export default function BetHistoryPanel() {
               </div>
 
               {/* Results */}
-              {bet.applied && bet.finalNet != null && (
+              {bet.resolved && bet.actualNet != null && (
                 <div
                   className={`text-sm font-semibold ${
-                    bet.finalNet >= 0 ? "text-green-600" : "text-red-600"
+                    bet.actualNet >= 0 ? "text-green-600" : "text-red-600"
                   }`}
                 >
-                  Net Result: {bet.finalNet.toFixed(2)}
+                  Net Result: {bet.actualNet.toFixed(2)}
+                  {bet.matchResults && (
+                    <div className="text-xs text-gray-600 mt-1">
+                      Results:{" "}
+                      {Object.entries(bet.matchResults)
+                        .map(
+                          ([idx, res]) =>
+                            `M${parseInt(idx) + 1}: ${
+                              res === "H" ? "Home" : res === "D" ? "Draw" : "Away"
+                            }`
+                        )
+                        .join(", ")}
+                    </div>
+                  )}
                 </div>
               )}
 
-              {!bet.applied && (
+              {!bet.applied && !bet.resolved && (
                 <div className="text-sm text-gray-500">
                   R: {bet.R?.toFixed(3)} • {bet.outcomes?.length || 0} possible
-                  outcomes
+                  outcomes • Status: Pending results
+                </div>
+              )}
+
+              {bet.applied && !bet.resolved && (
+                <div className="text-sm text-blue-600">
+                  Outcome applied (simulated) • Awaiting actual results
                 </div>
               )}
             </div>
