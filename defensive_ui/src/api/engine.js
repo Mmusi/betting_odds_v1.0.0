@@ -1,15 +1,4 @@
 
-from flask import Flask, request, jsonify
-from defensive_engine_full import (
-    Bet, solve_defensive_mip_generic, live_recalibrate,
-    post_result_hedge, BankrollTracker
-)
-from prediction_engine import (
-    analyze_match_odds, create_accumulator_bet, recommend_best_combos,
-    highlight_winning_bets, solve_with_accumulator
-)
-import json
-from flask_cors import CORS
 
 const BASE = import.meta.env.VITE_API_BASE || "http://localhost:5001/api";
 
