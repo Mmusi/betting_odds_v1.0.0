@@ -5,6 +5,7 @@ import { useBankroll } from "../context/BankrollContext";
 export default function ResultsPanel({ sol }) {
   const { applyOutcome } = useBankroll();
   const [appliedOutcome, setAppliedOutcome] = useState(null);
+  const [hoveredOutcome, setHoveredOutcome] = useState(null); // NEW: For highlighting
 
   // ============================================
   // SAFETY CHECKS

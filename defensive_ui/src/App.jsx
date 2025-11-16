@@ -8,17 +8,23 @@ import BetHistoryPanel from "./components/BetHistoryPanel";
 import StatisticsDashboard from "./components/StatisticsDashboard";
 import ImportExportPanel from "./components/ImportExportPanel";
 import MatchResultsEntry from "./components/MatchResultsEntry";
+import SmartPredictions from "./components/SmartPredictions";
+import AccumulatorBuilder from "./components/AccumulatorBuilder";
 
 export default function App() {
   const [sol, setSol] = useState(null);
-  const [activeTab, setActiveTab] = useState("solver"); // solver, history, stats, results, settings
+  const [currentMatches, setCurrentMatches] = useState([]); // NEW: Track entered matches
+  const [activeTab, setActiveTab] = useState("solver");
 
-  const handleSolved = (solution) => {
+  const handleSolved = (solution, bets, matches) => {
     setSol(solution);
+    setCurrentMatches(matches); // Store matches for predictions
   };
 
   const tabs = [
     { id: "solver", label: "⚡ Solver", icon: "⚡" },
+    { id: "predictions", label: "🤖 AI", icon: "🤖" },
+    { id: "accumulator", label: "🎲 Acca", icon: "🎲" },
     { id: "results", label: "🎯 Results", icon: "🎯" },
     { id: "history", label: "📜 History", icon: "📜" },
     { id: "stats", label: "📊 Stats", icon: "📊" },
@@ -60,6 +66,14 @@ export default function App() {
               <SolverForm onSolved={handleSolved} />
               <ResultsPanel sol={sol} />
             </>
+          )}
+
+          {activeTab === "predictions" && (
+            <SmartPredictions matches={currentMatches} />
+          )}
+
+          {activeTab === "accumulator" && (
+            <AccumulatorBuilder matches={currentMatches} />
           )}
 
           {activeTab === "results" && <MatchResultsEntry />}
