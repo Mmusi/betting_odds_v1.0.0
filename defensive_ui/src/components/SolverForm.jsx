@@ -1,11 +1,13 @@
 // defensive_ui/src/components/SolverForm.jsx
-// ✅ PHASE 1: Calculate stakes WITHOUT deducting bankroll
+// ✅ ENHANCED: Better validation and error handling for insufficient stakes
 import React, { useState, useEffect, useRef } from "react";
 import { solve } from "../api/engine";
 import { useBankroll } from "../context/BankrollContext";
+import { useToast } from "./Toast";
 
 export default function SolverForm({ onSolved }) {
   const { bankroll, isLoading: bankrollLoading } = useBankroll();
+  const toast = useToast();
 
   const [budget, setBudget] = useState(10);
   const [matches, setMatches] = useState([
@@ -97,35 +99,61 @@ export default function SolverForm({ onSolved }) {
   };
 
   // ============================================
-  // VALIDATE INPUTS
+  // ✅ ENHANCED VALIDATION - FIXED FOR SINGLE MATCH
   // ============================================
   const validateInputs = () => {
     const budgetNum = parseFloat(budget);
 
     if (isNaN(budgetNum) || budgetNum <= 0) {
-      alert("❌ Budget must be greater than 0");
+      toast.error("❌ Budget must be greater than 0");
       return false;
     }
 
     if (bankroll != null && budgetNum > bankroll) {
-      alert(`❌ Budget (${budgetNum}) exceeds available bankroll (${bankroll.toFixed(2)})`);
+      toast.error(`❌ Budget (${budgetNum}) exceeds available bankroll (${bankroll.toFixed(2)})`);
       return false;
     }
 
+    // ✅ Count total number of bets that will be created
+    let totalBets = 0;
     for (const match of matches) {
       const odds = [match.home, match.draw, match.away, match.hd, match.ad, match.ha];
-      const hasAnyOdds = odds.some(o => o && parseFloat(o) > 0);
+      const validOdds = odds.filter(o => o && parseFloat(o) > 0);
       
-      if (!hasAnyOdds) {
-        alert(`❌ Match "${match.name || match.id}" has no odds entered`);
+      if (validOdds.length === 0) {
+        toast.error(`❌ Match "${match.name || match.id}" has no odds entered`);
         return false;
       }
 
-      for (const odd of odds) {
-        if (odd && (parseFloat(odd) < 1.01 || parseFloat(odd) > 1000)) {
-          alert(`❌ Invalid odds value: ${odd} (must be between 1.01 and 1000)`);
+      totalBets += validOdds.length;
+
+      // Validate odds range
+      for (const odd of validOdds) {
+        const oddValue = parseFloat(odd);
+        if (oddValue < 1.01 || oddValue > 1000) {
+          toast.error(`❌ Invalid odds value: ${odd} (must be between 1.01 and 1000)`);
           return false;
         }
+      }
+    }
+
+    // ✅ FIXED: Different minimum requirements based on number of matches
+    if (matches.length === 1) {
+      // Single match: Just need enough for each bet (can be less than 1.0 per bet)
+      // Allow any stake >= 1.0 (solver will distribute optimally)
+      if (budgetNum < 1.0) {
+        toast.error(`❌ Minimum stake for single match: 1.00`);
+        return false;
+      }
+    } else {
+      // Multiple matches: Need at least 1.0 per bet to avoid solver failures
+      const minimumRequired = totalBets * 1.0;
+      if (budgetNum < minimumRequired) {
+        toast.error(
+          `❌ Insufficient stake! You have ${totalBets} bets requiring minimum ${minimumRequired.toFixed(2)}. ` +
+          `Please increase your stake to at least ${Math.ceil(minimumRequired)}.00`
+        );
+        return false;
       }
     }
 
@@ -133,7 +161,7 @@ export default function SolverForm({ onSolved }) {
   };
 
   // ============================================
-  // ✅ SOLVE WITHOUT DEDUCTING BANKROLL
+  // ✅ SOLVE WITH ERROR HANDLING
   // ============================================
   const handleSolve = async () => {
     if (!validateInputs()) return;
@@ -154,13 +182,29 @@ export default function SolverForm({ onSolved }) {
       // Call solver
       const res = await solve(bets, parseFloat(budget), 1.0, matches.length);
 
-      // ✅ NO BANKROLL DEDUCTION HERE
-      // Just pass solution to parent (AI Advisor step)
+      // ✅ CHECK SOLVER RESPONSE
+      if (res.status === "InsufficientBankrollForMinimums") {
+        toast.error(
+          `❌ Solver failed: Need at least ${res.total_min_required?.toFixed(2)} for minimum stakes. ` +
+          `Please increase your stake to at least ${Math.ceil(res.total_min_required || 12)}.00`
+        );
+        setLoading(false);
+        return;
+      }
+
+      if (res.status !== "Optimal") {
+        toast.error(`❌ Solver failed with status: ${res.status}`);
+        setLoading(false);
+        return;
+      }
+
+      // ✅ Success - pass to AI Advisor
+      toast.success("✅ Stakes calculated successfully!");
       onSolved(res, bets, matches, parseFloat(budget));
 
     } catch (err) {
-      alert("❌ Error: " + err.message);
-      console.error(err);
+      console.error("Solve error:", err);
+      toast.error("❌ Error: " + err.message);
     } finally {
       setLoading(false);
     }
@@ -180,6 +224,14 @@ export default function SolverForm({ onSolved }) {
   const safeBankroll = bankroll ?? 0;
   const displayBankroll = safeBankroll.toFixed(2);
 
+  // ✅ Calculate recommended minimum stake
+  const totalBets = matches.reduce((sum, match) => {
+    const validOdds = [match.home, match.draw, match.away, match.hd, match.ad, match.ha]
+      .filter(o => o && parseFloat(o) > 0);
+    return sum + validOdds.length;
+  }, 0);
+  const recommendedMinimum = Math.max(totalBets * 1.0, 12);
+
   return (
     <div className="bg-white p-5 rounded-xl shadow-md mb-6">
       <h2 className="text-lg font-semibold mb-4">⚙️ Step 1: Calculate Stakes</h2>
@@ -187,6 +239,20 @@ export default function SolverForm({ onSolved }) {
       <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm text-blue-800">
         💡 <b>Calculate stakes first</b> — bankroll is only deducted when you place bets
       </div>
+
+      {/* ✅ MINIMUM STAKE WARNING */}
+      {totalBets > 0 && matches.length > 1 && (
+        <div className="bg-orange-50 border border-orange-200 rounded p-3 mb-4 text-sm text-orange-800">
+          ⚠️ <b>Minimum stake required:</b> {recommendedMinimum.toFixed(2)} 
+          ({totalBets} bets × 1.00 each)
+        </div>
+      )}
+
+      {totalBets > 0 && matches.length === 1 && (
+        <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm text-blue-800">
+          💡 <b>Single match:</b> Minimum {totalBets.toFixed(2)} required ({totalBets} bets)
+        </div>
+      )}
 
       {/* Budget & Actions */}
       <div className="flex flex-wrap items-center gap-3 mb-5">
@@ -196,12 +262,22 @@ export default function SolverForm({ onSolved }) {
           value={budget}
           onChange={(e) => setBudget(e.target.value)}
           className="border px-3 py-2 rounded w-32"
-          min="1"
+          min={recommendedMinimum}
           max={safeBankroll}
         />
         <span className="text-sm text-gray-500">
           (Available: {displayBankroll})
         </span>
+
+        {/* ✅ Quick Set Minimum Button */}
+        {totalBets > 0 && parseFloat(budget) < recommendedMinimum && matches.length > 1 && (
+          <button
+            onClick={() => setBudget(recommendedMinimum.toString())}
+            className="text-sm px-3 py-1 bg-orange-100 text-orange-700 rounded hover:bg-orange-200"
+          >
+            Set Minimum ({recommendedMinimum.toFixed(2)})
+          </button>
+        )}
 
         <button
           onClick={addMatch}
@@ -212,7 +288,7 @@ export default function SolverForm({ onSolved }) {
 
         <button
           onClick={handleSolve}
-          disabled={loading || parseFloat(budget) > safeBankroll}
+          disabled={loading || parseFloat(budget) > safeBankroll || (matches.length > 1 && parseFloat(budget) < recommendedMinimum) || (matches.length === 1 && parseFloat(budget) < totalBets)}
           className="bg-green-600 hover:bg-green-700 text-white px-5 py-2 rounded shadow-md transition disabled:bg-gray-400 disabled:cursor-not-allowed"
         >
           {loading ? "Calculating..." : "⚡ Calculate Stakes"}

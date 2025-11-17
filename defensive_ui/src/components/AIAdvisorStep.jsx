@@ -1,5 +1,5 @@
 // defensive_ui/src/components/AIAdvisorStep.jsx
-// ✅ PHASE 2: AI Advisory - Analyze outcomes and recommend betting strategy
+// ✅ ENHANCED: Clickable recommendations with hover tooltips
 import React, { useState, useEffect } from "react";
 import { useToast } from "./Toast";
 
@@ -16,6 +16,7 @@ export default function AIAdvisorStep({
   const [selectedOutcomes, setSelectedOutcomes] = useState([]);
   const [recommendations, setRecommendations] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [hoveredRec, setHoveredRec] = useState(null);
   const toast = useToast();
 
   // Auto-analyze on mount
@@ -65,7 +66,6 @@ export default function AIAdvisorStep({
   };
 
   const selectBestOutcomes = () => {
-    // Auto-select 3 best outcomes based on net profit
     if (!solution.omega || !solution.nets) {
       toast.error("No outcomes available");
       return;
@@ -79,6 +79,31 @@ export default function AIAdvisorStep({
     
     setSelectedOutcomes(sorted);
     toast.success("Selected 3 best outcomes");
+  };
+
+  // ✅ APPLY RECOMMENDATION
+  const handleApplyRecommendation = (rec) => {
+    if (rec.strategy === "Safe Accumulator" && rec.accumulator) {
+      // Build accumulator with recommended selections
+      const selections = {};
+      rec.accumulator.legs.forEach((leg, idx) => {
+        selections[idx] = leg.selection;
+      });
+      
+      toast.info("Loading accumulator builder with AI selections...");
+      onBuildAccumulator({
+        solution,
+        matches,
+        selectedOutcomes: [],
+        budget,
+        aiRecommendation: rec,
+        preSelectedLegs: selections
+      });
+    } else {
+      // Apply as individual bets - select best outcomes
+      selectBestOutcomes();
+      toast.success(`Applied: ${rec.strategy}`);
+    }
   };
 
   const handlePlaceIndividualBets = () => {
@@ -143,12 +168,152 @@ export default function AIAdvisorStep({
         </div>
       </div>
 
+      {/* ✅ AI RECOMMENDATIONS - CLICKABLE WITH TOOLTIPS */}
+      {recommendations && recommendations.length > 0 && (
+        <div className="border-t pt-6 mb-6">
+          <h3 className="font-semibold mb-3">🎯 AI Recommendations (Click to Apply)</h3>
+          
+          <div className="space-y-3">
+            {recommendations.slice(0, 3).map((rec, idx) => (
+              <div 
+                key={idx} 
+                className="relative"
+                onMouseEnter={() => setHoveredRec(idx)}
+                onMouseLeave={() => setHoveredRec(null)}
+              >
+                <button
+                  onClick={() => handleApplyRecommendation(rec)}
+                  className="w-full border-2 rounded-lg p-4 bg-gradient-to-r from-indigo-50 to-blue-50 hover:from-indigo-100 hover:to-blue-100 transition text-left relative"
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-gray-800">{rec.strategy}</h4>
+                      <p className="text-sm text-gray-600">{rec.description}</p>
+                    </div>
+                    <div className="text-right ml-4">
+                      <div className="text-xs text-gray-500">EV Rating</div>
+                      <div className="text-lg font-bold text-green-600">
+                        {rec.expected_value_rating}/10
+                      </div>
+                    </div>
+                  </div>
+
+                  {rec.accumulator && (
+                    <div className="text-sm text-indigo-700 mt-2 flex items-center gap-2">
+                      <span>🎲</span>
+                      <span>
+                        {rec.accumulator.num_legs} legs @ {rec.accumulator.total_odds}x odds 
+                        • {rec.accumulator.win_probability}% win chance
+                      </span>
+                    </div>
+                  )}
+
+                  {rec.suggested_stake && (
+                    <div className="text-sm text-purple-700 mt-2">
+                      💰 Suggested stake: {rec.suggested_stake.toFixed(2)}
+                    </div>
+                  )}
+
+                  {/* Click hint */}
+                  <div className="absolute top-2 right-2 text-xs bg-blue-600 text-white px-2 py-1 rounded">
+                    Click to Apply
+                  </div>
+                </button>
+
+                {/* ✅ HOVER TOOLTIP */}
+                {hoveredRec === idx && (
+                  <div className="absolute z-50 left-0 right-0 mt-2 bg-white border-2 border-indigo-500 rounded-lg shadow-xl p-4 text-sm">
+                    <div className="font-semibold mb-2 text-indigo-700">
+                      📊 Detailed Analysis
+                    </div>
+
+                    {rec.accumulator ? (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <div className="text-xs text-gray-500">Total Odds</div>
+                            <div className="font-bold text-indigo-600">
+                              {rec.accumulator.total_odds}x
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500">Win Probability</div>
+                            <div className="font-bold text-green-600">
+                              {rec.accumulator.win_probability}%
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500">Risk Level</div>
+                            <div className={`font-bold ${
+                              rec.accumulator.risk_level === "Low" ? "text-green-600" :
+                              rec.accumulator.risk_level === "Medium" ? "text-yellow-600" :
+                              "text-red-600"
+                            }`}>
+                              {rec.accumulator.risk_level}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500">Number of Legs</div>
+                            <div className="font-bold">{rec.accumulator.num_legs}</div>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t">
+                          <div className="text-xs text-gray-500 mb-1">Selections:</div>
+                          {rec.accumulator.legs.map((leg, i) => (
+                            <div key={i} className="flex justify-between text-xs">
+                              <span>{leg.match}: <b>{leg.selection}</b></span>
+                              <span className="text-indigo-600">{leg.odds}x</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="pt-2 border-t text-xs text-gray-600">
+                          💡 Click to load this accumulator in the builder
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div>
+                          <div className="text-xs text-gray-500">Strategy Type</div>
+                          <div className="font-medium">{rec.strategy}</div>
+                        </div>
+                        {rec.bet_type && (
+                          <div>
+                            <div className="text-xs text-gray-500">Recommended Bet</div>
+                            <div className="font-medium text-indigo-600">{rec.bet_type}</div>
+                          </div>
+                        )}
+                        {rec.targets && (
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Value Targets:</div>
+                            {rec.targets.map((target, i) => (
+                              <div key={i} className="text-xs bg-green-50 rounded p-1 mb-1">
+                                <div className="font-medium">{target.match}</div>
+                                <div className="text-gray-600">{target.reason}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="pt-2 border-t text-xs text-gray-600">
+                          💡 Click to select best outcomes for individual bets
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Instructions */}
       <div className="bg-yellow-50 border border-yellow-200 rounded p-3 mb-4 text-sm">
         <b>📋 Instructions:</b>
         <ol className="list-decimal ml-5 mt-2 space-y-1">
-          <li>Select 1-3 outcomes you want to analyze</li>
-          <li>Review AI recommendations below</li>
+          <li>Click an AI recommendation to apply it automatically, OR</li>
+          <li>Manually select 1-3 outcomes below to analyze</li>
           <li>Choose: Place individual bets OR Build accumulator</li>
         </ol>
       </div>
@@ -200,38 +365,6 @@ export default function AIAdvisorStep({
           ))}
         </div>
       </div>
-
-      {/* AI Recommendations */}
-      {recommendations && recommendations.length > 0 && (
-        <div className="border-t pt-6 mb-6">
-          <h3 className="font-semibold mb-3">🎯 AI Recommendations</h3>
-          
-          <div className="space-y-3">
-            {recommendations.slice(0, 3).map((rec, idx) => (
-              <div key={idx} className="border rounded-lg p-4 bg-gradient-to-r from-indigo-50 to-blue-50">
-                <div className="flex justify-between items-start mb-2">
-                  <div>
-                    <h4 className="font-semibold text-gray-800">{rec.strategy}</h4>
-                    <p className="text-sm text-gray-600">{rec.description}</p>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-xs text-gray-500">EV Rating</div>
-                    <div className="text-lg font-bold text-green-600">
-                      {rec.expected_value_rating}/10
-                    </div>
-                  </div>
-                </div>
-
-                {rec.accumulator && (
-                  <div className="text-sm text-indigo-700 mt-2">
-                    💡 Accumulator: {rec.accumulator.total_odds}x odds, {rec.accumulator.win_probability}% win chance
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Strategy Selection */}
       <div className="border-t pt-6">
