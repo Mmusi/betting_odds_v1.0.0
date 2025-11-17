@@ -69,6 +69,13 @@ Start implementing team name auto-extraction and cashout simulator.
 
 Let me know if you still see errors or if we're good to move forward! 🔥
 
+For Results - when recording after placing bets on 6 diffirent odds or outcomes. most of times i monitor game
+and cashout where I feel there are no more opportunities to save . for example If I bet P1 on all six options 
+and during the game I think the game will end as a draw. i cashout on Home team winning bet , Away team winning bet 
+and on double chance winning bet. leaving draw bet , home team win or draw double chance and Away team double chance.
+I want this logic and other logic included in my cashout options and accordinlgly update bankroll.
+In Solver section, there is need for a back link to calculate odd under analyze (2).
+
 
 
 

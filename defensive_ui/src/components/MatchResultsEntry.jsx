@@ -8,6 +8,7 @@ import {
 } from "../utils/db";
 import { useToast } from "./Toast";
 import { useBankroll } from "../context/BankrollContext";
+import EnhancedCashout from "./EnhancedCashout";
 
 export default function MatchResultsEntry() {
   const [unresolvedBets, setUnresolvedBets] = useState([]);

@@ -11,7 +11,8 @@ export default function AIAdvisorStep({
   bets, 
   budget,
   onPlaceBets,
-  onBuildAccumulator 
+  onBuildAccumulator,
+  onBack // ✅ NEW: Back button callback
 }) {
   const [selectedOutcomes, setSelectedOutcomes] = useState([]);
   const [recommendations, setRecommendations] = useState(null);
@@ -81,23 +82,30 @@ export default function AIAdvisorStep({
     toast.success("Selected 3 best outcomes");
   };
 
-  // ✅ APPLY RECOMMENDATION
+  // ✅ APPLY RECOMMENDATION - FIXED for multiple legs
   const handleApplyRecommendation = (rec) => {
     if (rec.strategy === "Safe Accumulator" && rec.accumulator) {
-      // Build accumulator with recommended selections
+      // Build accumulator with ALL recommended selections
       const selections = {};
-      rec.accumulator.legs.forEach((leg, idx) => {
-        selections[idx] = leg.selection;
+      rec.accumulator.legs.forEach((leg) => {
+        // Find match index by matching names
+        const matchIdx = matches.findIndex(m => 
+          (m.name || m.id) === leg.match
+        );
+        
+        if (matchIdx >= 0) {
+          selections[matchIdx] = leg.selection;
+        }
       });
       
-      toast.info("Loading accumulator builder with AI selections...");
+      toast.info(`Loading accumulator with ${rec.accumulator.legs.length} legs...`);
       onBuildAccumulator({
         solution,
         matches,
         selectedOutcomes: [],
         budget,
         aiRecommendation: rec,
-        preSelectedLegs: selections
+        preSelectedLegs: selections // ✅ Pass ALL legs
       });
     } else {
       // Apply as individual bets - select best outcomes
@@ -142,7 +150,18 @@ export default function AIAdvisorStep({
 
   return (
     <div className="bg-white p-5 rounded-xl shadow-md mb-6">
-      <h2 className="text-lg font-semibold mb-4">🤖 Step 2: AI Betting Advisor</h2>
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-lg font-semibold">🤖 Step 2: AI Betting Advisor</h2>
+        {/* ✅ Back Button */}
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="text-sm px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition"
+          >
+            ← Back to Calculator
+          </button>
+        )}
+      </div>
 
       {/* Analysis Summary */}
       <div className="grid md:grid-cols-3 gap-4 mb-6">
