@@ -1,0 +1,1828 @@
+// defensive_ui/src/components/AccumulatorBuilder.jsx
+// ✅ ENHANCED: Direct bet placement when 2+ selections made
+import React, { useState, useEffect } from "react";
+import { useToast } from "./Toast";
+import { useBankroll } from "../context/BankrollContext";
+import { saveBetRecord } from "../utils/db";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5001/api";
+
+export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }) {
+  const [selections, setSelections] = useState({});
+  const [accumulator, setAccumulator] = useState(null);
+  const [stake, setStake] = useState(10);
+  const [placing, setPlacing] = useState(false);
+  
+  const toast = useToast();
+  const { bankroll, deductStake } = useBankroll();
+
+  // ✅ Load AI pre-selected legs if provided
+  useEffect(() => {
+    if (aiPreSelectedLegs) {
+      setSelections(aiPreSelectedLegs);
+      toast.info("🤖 AI recommendations loaded!");
+    }
+  }, [aiPreSelectedLegs]);
+
+  useEffect(() => {
+    if (Object.keys(selections).length > 0) {
+      calculateAccumulator();
+    } else {
+      setAccumulator(null);
+    }
+  }, [selections]);
+
+  const calculateAccumulator = async () => {
+    try {
+      const selectionsArray = Object.entries(selections).map(
+        ([matchIdx, selection]) => ({
+          match_index: parseInt(matchIdx),
+          selection,
+        })
+      );
+
+      const response = await fetch(`${API_BASE}/create_accumulator`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          matches: matches.map((m) => ({
+            name: m.name || m.id,
+            home: parseFloat(m.home) || 0,
+            draw: parseFloat(m.draw) || 0,
+            away: parseFloat(m.away) || 0,
+            hd: parseFloat(m.hd) || 0,
+            ad: parseFloat(m.ad) || 0,
+            ha: parseFloat(m.ha) || 0,
+          })),
+          selections: selectionsArray,
+        }),
+      });
+
+      const data = await response.json();
+      setAccumulator(data);
+    } catch (err) {
+      console.error("Failed to create accumulator:", err);
+      toast.error("Failed to calculate accumulator");
+    }
+  };
+
+  const handleSelectionChange = (matchIndex, selection) => {
+    setSelections((prev) => {
+      const updated = { ...prev };
+      if (updated[matchIndex] === selection) {
+        delete updated[matchIndex]; // Deselect
+      } else {
+        updated[matchIndex] = selection;
+      }
+      return updated;
+    });
+  };
+
+  const clearSelections = () => {
+    setSelections({});
+  };
+
+  // ✅ DIRECT PLACEMENT (2+ selections = automatic single bet placement)
+  const handlePlaceBet = async () => {
+    if (!accumulator || placing) return;
+
+    const numSelections = Object.keys(selections).length;
+    
+    // Validate
+    if (numSelections < 2) {
+      toast.warning("Select at least 2 outcomes to place accumulator");
+      return;
+    }
+
+    const stakeAmount = parseFloat(stake);
+    if (isNaN(stakeAmount) || stakeAmount <= 0) {
+      toast.error("Invalid stake amount");
+      return;
+    }
+
+    if (stakeAmount > bankroll) {
+      toast.error(`Insufficient bankroll (${bankroll.toFixed(2)})`);
+      return;
+    }
+
+    // Confirm placement
+    if (!confirm(
+      `Place accumulator bet?\n\n` +
+      `Stake: ${stakeAmount.toFixed(2)}\n` +
+      `Total Odds: ${accumulator.total_odds}x\n` +
+      `Potential Win: ${(stakeAmount * accumulator.total_odds).toFixed(2)}\n` +
+      `Risk: ${accumulator.risk_level}`
+    )) {
+      return;
+    }
+
+    setPlacing(true);
+    try {
+      // 1. Deduct stake from bankroll
+      await deductStake(stakeAmount);
+
+      // 2. Save bet record for results tracking
+      await saveBetRecord({
+        matches: matches.map(m => ({ ...m })),
+        stakes: { ACCA: stakeAmount }, // Single accumulator stake
+        outcomes: [Object.values(selections)], // Single outcome = all selections must win
+        nets: [-stakeAmount, stakeAmount * accumulator.total_odds - stakeAmount], // Loss or win
+        R: -stakeAmount, // Worst case
+        selectedOutcomes: [0], // Only 1 outcome (all win)
+        strategy: "accumulator",
+        budget: stakeAmount,
+        status: "placed",
+        applied: false,
+        resolved: false,
+        accumulatorData: {
+          legs: accumulator.legs,
+          totalOdds: accumulator.total_odds,
+          selections: selections,
+        },
+      });
+
+      toast.success(`✅ Accumulator placed! Stake: ${stakeAmount.toFixed(2)}`);
+
+      // 3. Clear form
+      clearSelections();
+      setStake(10);
+
+      // 4. Optional: Navigate to results tab
+      setTimeout(() => {
+        toast.info("💡 Record match results in the Results tab");
+      }, 1500);
+
+    } catch (err) {
+      console.error("Failed to place accumulator:", err);
+      toast.error("Failed to place bet: " + err.message);
+    } finally {
+      setPlacing(false);
+    }
+  };
+
+  if (!matches || matches.length === 0) {
+    return (
+      <div className="bg-white p-5 rounded-xl shadow-md">
+        <p className="text-gray-500 text-center">
+          Enter match odds to build accumulators
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white p-5 rounded-xl shadow-md">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-lg font-semibold">🎲 Accumulator Builder</h2>
+        {Object.keys(selections).length > 0 && (
+          <button
+            onClick={clearSelections}
+            className="text-sm text-red-600 hover:text-red-800"
+          >
+            Clear All
+          </button>
+        )}
+      </div>
+
+      {/* ✅ INFO BANNER */}
+      {Object.keys(selections).length >= 2 && (
+        <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm text-blue-800">
+          💡 <b>Ready to place!</b> Select stake and click "Place Bet" below
+        </div>
+      )}
+
+      {/* Match Selections */}
+      <div className="space-y-4 mb-6">
+        {matches.map((match, idx) => (
+          <div key={idx} className="border rounded-lg p-3 bg-gray-50">
+            <div className="font-medium mb-2">
+              {match.name || `Match ${idx + 1}`}
+            </div>
+
+            <div className="grid grid-cols-6 gap-2">
+              {[
+                { label: "1", value: "H", odds: match.home },
+                { label: "X", value: "D", odds: match.draw },
+                { label: "2", value: "A", odds: match.away },
+                { label: "1X", value: "HD", odds: match.hd },
+                { label: "X2", value: "AD", odds: match.ad },
+                { label: "12", value: "HA", odds: match.ha },
+              ].map(
+                ({ label, value, odds }) =>
+                  odds && (
+                    <button
+                      key={value}
+                      onClick={() => handleSelectionChange(idx, value)}
+                      className={`px-2 py-2 rounded text-sm transition ${
+                        selections[idx] === value
+                          ? "bg-indigo-600 text-white font-bold"
+                          : "bg-white hover:bg-gray-100"
+                      }`}
+                    >
+                      {label}
+                      <div className="text-xs">{parseFloat(odds).toFixed(2)}</div>
+                    </button>
+                  )
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Accumulator Summary */}
+      {accumulator && (
+        <div className="border-t pt-4">
+          <div className="bg-indigo-50 rounded-lg p-4 mb-4">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-semibold">Accumulator Slip</h3>
+              <div className="text-right">
+                <div className="text-xs text-gray-600">Total Odds</div>
+                <div className="text-2xl font-bold text-indigo-600">
+                  {accumulator.total_odds}x
+                </div>
+              </div>
+            </div>
+
+            {/* Legs */}
+            <div className="space-y-2 mb-4">
+              {accumulator.legs.map((leg, i) => (
+                <div
+                  key={i}
+                  className="flex justify-between bg-white rounded p-2 text-sm"
+                >
+                  <span className="text-gray-700">
+                    {leg.match}: <b>{leg.selection}</b>
+                  </span>
+                  <span className="font-medium text-indigo-600">
+                    {leg.odds}x
+                  </span>
+                </div>
+              ))}
+            </div>
+
+            {/* Risk Analysis */}
+            <div className="grid grid-cols-3 gap-3 text-center text-sm mb-4">
+              <div className="bg-white rounded p-2">
+                <div className="text-xs text-gray-600">Legs</div>
+                <div className="font-bold">{accumulator.num_legs}</div>
+              </div>
+              <div className="bg-white rounded p-2">
+                <div className="text-xs text-gray-600">Win %</div>
+                <div className="font-bold text-green-600">
+                  {accumulator.win_probability}%
+                </div>
+              </div>
+              <div className="bg-white rounded p-2">
+                <div className="text-xs text-gray-600">Risk</div>
+                <div
+                  className={`font-bold ${
+                    accumulator.risk_level === "Low"
+                      ? "text-green-600"
+                      : accumulator.risk_level === "Medium"
+                      ? "text-yellow-600"
+                      : "text-red-600"
+                  }`}
+                >
+                  {accumulator.risk_level}
+                </div>
+              </div>
+            </div>
+
+            {/* Stake Input */}
+            <div className="flex items-center gap-3 mb-3">
+              <label className="text-sm font-medium">Stake:</label>
+              <input
+                type="number"
+                value={stake}
+                onChange={(e) => setStake(e.target.value)}
+                className="border px-3 py-2 rounded w-24"
+                min="1"
+                max={bankroll}
+              />
+              <span className="text-sm text-gray-600">
+                → Potential Win:{" "}
+                <b className="text-green-600">
+                  {(stake * accumulator.total_odds).toFixed(2)}
+                </b>
+              </span>
+            </div>
+
+            {/* Recommendation */}
+            <div className="bg-white rounded p-3 border text-sm mb-4">
+              <div className="flex items-start gap-2">
+                <span className="text-lg">💡</span>
+                <div>
+                  <div className="font-medium mb-1">AI Recommendation</div>
+                  <div className="text-gray-600">
+                    Suggested stake: {accumulator.recommended_stake_percent}% of
+                    bankroll ≈ {((bankroll * accumulator.recommended_stake_percent) / 100).toFixed(2)}
+                  </div>
+                  {accumulator.risk_level === "High" && (
+                    <div className="text-orange-600 mt-1">
+                      ⚠️ High risk accumulator - consider reducing stake or
+                      removing legs
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* ✅ DIRECT PLACEMENT */}
+            <div className="bg-orange-50 border border-orange-200 rounded p-3 mb-3 text-sm text-orange-800">
+              ⚠️ <b>Bankroll will be deducted</b> when you place this bet
+            </div>
+          </div>
+
+          {/* Action Buttons */}
+          <div className="flex gap-3">
+            <button
+              className="flex-1 px-4 py-3 bg-green-600 text-white rounded hover:bg-green-700 transition font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
+              onClick={handlePlaceBet}
+              disabled={placing || parseFloat(stake) > bankroll || parseFloat(stake) <= 0}
+            >
+              {placing ? "Placing Bet..." : "✅ Place Accumulator Bet"}
+            </button>
+            <button
+              className="px-4 py-3 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition"
+              onClick={clearSelections}
+            >
+              Clear
+            </button>
+          </div>
+
+          {/* Disclaimer */}
+          <div className="mt-3 text-xs text-gray-500 text-center">
+            Bet will be recorded in Results tab for outcome tracking
+          </div>
+        </div>
+      )}
+
+      {/* Instructions */}
+      {Object.keys(selections).length === 0 && (
+        <div className="text-center text-gray-500 text-sm py-8">
+          Click on odds to build your accumulator slip
+        </div>
+      )}
+
+      {Object.keys(selections).length === 1 && (
+        <div className="text-center text-orange-500 text-sm py-8">
+          ⚠️ Select at least 2 outcomes to create an accumulator
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// defensive_ui/src/components/AIAdvisorStep.jsx
+// ✅ ENHANCED: Clickable recommendations with hover tooltips
+import React, { useState, useEffect } from "react";
+import { useToast } from "./Toast";
+
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5001/api";
+
+export default function AIAdvisorStep({ 
+  solution, 
+  matches, 
+  bets, 
+  budget,
+  onPlaceBets,
+  onBuildAccumulator,
+  onBack // ✅ NEW: Back button callback
+}) {
+  const [selectedOutcomes, setSelectedOutcomes] = useState([]);
+  const [recommendations, setRecommendations] = useState(null);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [hoveredRec, setHoveredRec] = useState(null);
+  const toast = useToast();
+
+  // Auto-analyze on mount
+  useEffect(() => {
+    if (solution && matches) {
+      analyzeOutcomes();
+    }
+  }, [solution, matches]);
+
+  const analyzeOutcomes = async () => {
+    setAnalyzing(true);
+    try {
+      const response = await fetch(`${API_BASE}/recommend_combos`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          matches: matches.map(m => ({
+            name: m.name || m.id,
+            home: parseFloat(m.home) || 0,
+            draw: parseFloat(m.draw) || 0,
+            away: parseFloat(m.away) || 0,
+            hd: parseFloat(m.hd) || 0,
+            ad: parseFloat(m.ad) || 0,
+            ha: parseFloat(m.ha) || 0,
+          })),
+          budget,
+          risk_tolerance: "medium",
+        }),
+      });
+
+      const data = await response.json();
+      setRecommendations(data.recommendations || []);
+    } catch (err) {
+      console.error("Analysis failed:", err);
+      toast.error("Failed to analyze outcomes");
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  const toggleOutcome = (index) => {
+    setSelectedOutcomes(prev => 
+      prev.includes(index) 
+        ? prev.filter(i => i !== index)
+        : [...prev, index]
+    );
+  };
+
+  const selectBestOutcomes = () => {
+    if (!solution.omega || !solution.nets) {
+      toast.error("No outcomes available");
+      return;
+    }
+    
+    const sorted = solution.omega
+      .map((outcome, idx) => ({ idx, net: solution.nets[idx] }))
+      .sort((a, b) => b.net - a.net)
+      .slice(0, 3)
+      .map(o => o.idx);
+    
+    setSelectedOutcomes(sorted);
+    toast.success("Selected 3 best outcomes");
+  };
+
+  // ✅ APPLY RECOMMENDATION - FIXED for multiple legs
+  const handleApplyRecommendation = (rec) => {
+    if (rec.strategy === "Safe Accumulator" && rec.accumulator) {
+      // Build accumulator with ALL recommended selections
+      const selections = {};
+      rec.accumulator.legs.forEach((leg) => {
+        // Find match index by matching names
+        const matchIdx = matches.findIndex(m => 
+          (m.name || m.id) === leg.match
+        );
+        
+        if (matchIdx >= 0) {
+          selections[matchIdx] = leg.selection;
+        }
+      });
+      
+      toast.info(`Loading accumulator with ${rec.accumulator.legs.length} legs...`);
+      onBuildAccumulator({
+        solution,
+        matches,
+        selectedOutcomes: [],
+        budget,
+        aiRecommendation: rec,
+        preSelectedLegs: selections // ✅ Pass ALL legs
+      });
+    } else {
+      // Apply as individual bets - select best outcomes
+      selectBestOutcomes();
+      toast.success(`Applied: ${rec.strategy}`);
+    }
+  };
+
+  const handlePlaceIndividualBets = () => {
+    if (selectedOutcomes.length === 0) {
+      toast.warning("Select at least 1 outcome for analysis");
+      return;
+    }
+
+    onPlaceBets({
+      solution,
+      matches,
+      bets,
+      budget,
+      selectedOutcomes,
+      strategy: "single"
+    });
+  };
+
+  const handleBuildAccumulator = () => {
+    if (selectedOutcomes.length === 0) {
+      toast.warning("Select outcomes to build accumulator");
+      return;
+    }
+
+    onBuildAccumulator({
+      solution,
+      matches,
+      selectedOutcomes,
+      budget
+    });
+  };
+
+  if (!solution) return null;
+
+  const isGood = solution.R > 0;
+
+  return (
+    <div className="bg-white p-5 rounded-xl shadow-md mb-6">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-lg font-semibold">🤖 Step 2: AI Betting Advisor</h2>
+        {/* ✅ Back Button */}
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="text-sm px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition"
+          >
+            ← Back to Calculator
+          </button>
+        )}
+      </div>
+
+      {/* Analysis Summary */}
+      <div className="grid md:grid-cols-3 gap-4 mb-6">
+        <div className="border rounded-lg p-4 bg-gray-50">
+          <div className="text-sm text-gray-600 mb-1">Guaranteed Return</div>
+          <div className={`text-2xl font-bold ${isGood ? "text-green-600" : "text-red-600"}`}>
+            {solution.R?.toFixed(3)}
+          </div>
+        </div>
+
+        <div className="border rounded-lg p-4 bg-gray-50">
+          <div className="text-sm text-gray-600 mb-1">Possible Outcomes</div>
+          <div className="text-2xl font-bold text-blue-600">
+            {solution.omega?.length || 0}
+          </div>
+        </div>
+
+        <div className="border rounded-lg p-4 bg-gray-50">
+          <div className="text-sm text-gray-600 mb-1">Budget</div>
+          <div className="text-2xl font-bold text-indigo-600">
+            {budget.toFixed(2)}
+          </div>
+        </div>
+      </div>
+
+      {/* ✅ AI RECOMMENDATIONS - CLICKABLE WITH TOOLTIPS */}
+      {recommendations && recommendations.length > 0 && (
+        <div className="border-t pt-6 mb-6">
+          <h3 className="font-semibold mb-3">🎯 AI Recommendations (Click to Apply)</h3>
+          
+          <div className="space-y-3">
+            {recommendations.slice(0, 3).map((rec, idx) => (
+              <div 
+                key={idx} 
+                className="relative"
+                onMouseEnter={() => setHoveredRec(idx)}
+                onMouseLeave={() => setHoveredRec(null)}
+              >
+                <button
+                  onClick={() => handleApplyRecommendation(rec)}
+                  className="w-full border-2 rounded-lg p-4 bg-gradient-to-r from-indigo-50 to-blue-50 hover:from-indigo-100 hover:to-blue-100 transition text-left relative"
+                >
+                  <div className="flex justify-between items-start mb-2">
+                    <div className="flex-1">
+                      <h4 className="font-semibold text-gray-800">{rec.strategy}</h4>
+                      <p className="text-sm text-gray-600">{rec.description}</p>
+                    </div>
+                    <div className="text-right ml-4">
+                      <div className="text-xs text-gray-500">EV Rating</div>
+                      <div className="text-lg font-bold text-green-600">
+                        {rec.expected_value_rating}/10
+                      </div>
+                    </div>
+                  </div>
+
+                  {rec.accumulator && (
+                    <div className="text-sm text-indigo-700 mt-2 flex items-center gap-2">
+                      <span>🎲</span>
+                      <span>
+                        {rec.accumulator.num_legs} legs @ {rec.accumulator.total_odds}x odds 
+                        • {rec.accumulator.win_probability}% win chance
+                      </span>
+                    </div>
+                  )}
+
+                  {rec.suggested_stake && (
+                    <div className="text-sm text-purple-700 mt-2">
+                      💰 Suggested stake: {rec.suggested_stake.toFixed(2)}
+                    </div>
+                  )}
+
+                  {/* Click hint */}
+                  <div className="absolute top-2 right-2 text-xs bg-blue-600 text-white px-2 py-1 rounded">
+                    Click to Apply
+                  </div>
+                </button>
+
+                {/* ✅ HOVER TOOLTIP */}
+                {hoveredRec === idx && (
+                  <div className="absolute z-50 left-0 right-0 mt-2 bg-white border-2 border-indigo-500 rounded-lg shadow-xl p-4 text-sm">
+                    <div className="font-semibold mb-2 text-indigo-700">
+                      📊 Detailed Analysis
+                    </div>
+
+                    {rec.accumulator ? (
+                      <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <div className="text-xs text-gray-500">Total Odds</div>
+                            <div className="font-bold text-indigo-600">
+                              {rec.accumulator.total_odds}x
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500">Win Probability</div>
+                            <div className="font-bold text-green-600">
+                              {rec.accumulator.win_probability}%
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500">Risk Level</div>
+                            <div className={`font-bold ${
+                              rec.accumulator.risk_level === "Low" ? "text-green-600" :
+                              rec.accumulator.risk_level === "Medium" ? "text-yellow-600" :
+                              "text-red-600"
+                            }`}>
+                              {rec.accumulator.risk_level}
+                            </div>
+                          </div>
+                          <div>
+                            <div className="text-xs text-gray-500">Number of Legs</div>
+                            <div className="font-bold">{rec.accumulator.num_legs}</div>
+                          </div>
+                        </div>
+
+                        <div className="pt-2 border-t">
+                          <div className="text-xs text-gray-500 mb-1">Selections:</div>
+                          {rec.accumulator.legs.map((leg, i) => (
+                            <div key={i} className="flex justify-between text-xs">
+                              <span>{leg.match}: <b>{leg.selection}</b></span>
+                              <span className="text-indigo-600">{leg.odds}x</span>
+                            </div>
+                          ))}
+                        </div>
+
+                        <div className="pt-2 border-t text-xs text-gray-600">
+                          💡 Click to load this accumulator in the builder
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        <div>
+                          <div className="text-xs text-gray-500">Strategy Type</div>
+                          <div className="font-medium">{rec.strategy}</div>
+                        </div>
+                        {rec.bet_type && (
+                          <div>
+                            <div className="text-xs text-gray-500">Recommended Bet</div>
+                            <div className="font-medium text-indigo-600">{rec.bet_type}</div>
+                          </div>
+                        )}
+                        {rec.targets && (
+                          <div>
+                            <div className="text-xs text-gray-500 mb-1">Value Targets:</div>
+                            {rec.targets.map((target, i) => (
+                              <div key={i} className="text-xs bg-green-50 rounded p-1 mb-1">
+                                <div className="font-medium">{target.match}</div>
+                                <div className="text-gray-600">{target.reason}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        <div className="pt-2 border-t text-xs text-gray-600">
+                          💡 Click to select best outcomes for individual bets
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Instructions */}
+      <div className="bg-yellow-50 border border-yellow-200 rounded p-3 mb-4 text-sm">
+        <b>📋 Instructions:</b>
+        <ol className="list-decimal ml-5 mt-2 space-y-1">
+          <li>Click an AI recommendation to apply it automatically, OR</li>
+          <li>Manually select 1-3 outcomes below to analyze</li>
+          <li>Choose: Place individual bets OR Build accumulator</li>
+        </ol>
+      </div>
+
+      {/* Outcome Selection Grid */}
+      <div className="mb-6">
+        <div className="flex justify-between items-center mb-3">
+          <h3 className="font-semibold">Select Outcomes to Analyze</h3>
+          <button
+            onClick={selectBestOutcomes}
+            className="text-sm px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+          >
+            ⭐ Select 3 Best
+          </button>
+        </div>
+
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-96 overflow-y-auto">
+          {solution.omega.map((outcome, i) => (
+            <button
+              key={i}
+              onClick={() => toggleOutcome(i)}
+              className={`border rounded-lg p-3 text-left transition ${
+                selectedOutcomes.includes(i)
+                  ? "bg-blue-100 border-blue-500"
+                  : "bg-gray-50 hover:bg-gray-100"
+              }`}
+            >
+              <div className="text-xs font-medium text-gray-600 mb-1">
+                Outcome {i + 1}
+              </div>
+              
+              <div className="text-sm mb-2">
+                {outcome.map((r, j) => (
+                  <span key={j} className="mr-2">
+                    M{j + 1}: <b>{r === "H" ? "1" : r === "D" ? "X" : "2"}</b>
+                  </span>
+                ))}
+              </div>
+
+              <div className="flex justify-between items-center">
+                <span className="text-xs text-gray-600">Net:</span>
+                <span className={`text-sm font-bold ${
+                  solution.nets[i] >= 0 ? "text-green-600" : "text-red-600"
+                }`}>
+                  {solution.nets[i] >= 0 ? "+" : ""}{solution.nets[i].toFixed(2)}
+                </span>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Strategy Selection */}
+      <div className="border-t pt-6">
+        <h3 className="font-semibold mb-3">Choose Your Strategy</h3>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          {/* Single Bets */}
+          <button
+            onClick={handlePlaceIndividualBets}
+            disabled={selectedOutcomes.length === 0}
+            className="border-2 rounded-lg p-6 text-left transition hover:border-blue-500 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-300 disabled:hover:bg-white"
+          >
+            <div className="text-3xl mb-2">📊</div>
+            <h4 className="font-bold mb-2">Place Individual Bets</h4>
+            <p className="text-sm text-gray-600 mb-3">
+              Place separate bets on each market with calculated stakes
+            </p>
+            <div className="text-sm font-medium text-blue-600">
+              {selectedOutcomes.length} outcome{selectedOutcomes.length !== 1 ? "s" : ""} selected
+            </div>
+          </button>
+
+          {/* Accumulator */}
+          <button
+            onClick={handleBuildAccumulator}
+            disabled={selectedOutcomes.length === 0}
+            className="border-2 rounded-lg p-6 text-left transition hover:border-purple-500 hover:bg-purple-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-300 disabled:hover:bg-white"
+          >
+            <div className="text-3xl mb-2">🎲</div>
+            <h4 className="font-bold mb-2">Build Accumulator</h4>
+            <p className="text-sm text-gray-600 mb-3">
+              Combine selections into a single accumulator bet
+            </p>
+            <div className="text-sm font-medium text-purple-600">
+              Higher risk, higher reward
+            </div>
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// defensive_ui/src/components/EnhancedCashout.jsx
+// ✅ Strategic cashout with multiple scenarios
+import React, { useState } from "react";
+import { useToast } from "./Toast";
+import { useBankroll } from "../context/BankrollContext";
+import { cashoutBet } from "../utils/db";
+
+export default function EnhancedCashout({ bet, onComplete }) {
+  const [cashoutScenario, setCashoutScenario] = useState(null);
+  const [customAmount, setCustomAmount] = useState("");
+  const [selectedBets, setSelectedBets] = useState([]);
+  const [processing, setProcessing] = useState(false);
+
+  const toast = useToast();
+  const { addWinnings } = useBankroll();
+
+  if (!bet) return null;
+
+  // Get total stake
+  const totalStake = bet.strategy === "accumulator"
+    ? (bet.stakes?.ACCA || 0)
+    : Object.values(bet.stakes || {}).reduce((sum, s) => sum + s, 0);
+
+  // Parse individual stakes
+  const individualStakes = Object.entries(bet.stakes || {}).map(([betId, stake]) => {
+    const parts = betId.split("_");
+    const matchIdx = parseInt(parts[0].replace("M", "")) - 1;
+    const betType = parts[1];
+    const match = bet.matches?.[matchIdx];
+
+    return {
+      betId,
+      stake,
+      matchIdx,
+      betType,
+      matchName: match?.name || `Match ${matchIdx + 1}`,
+      odds: getOddsForBet(match, betType),
+      label: getBetLabel(betType),
+    };
+  });
+
+  // ============================================
+  // STRATEGIC CASHOUT SCENARIOS
+  // ============================================
+  const scenarios = [
+    {
+      id: "expecting_draw",
+      name: "🎯 Expecting Draw",
+      description: "Keep Draw, HD (1X), AD (X2). Cash out H, A, HA",
+      keepBets: ["D", "HD", "AD"],
+      cashoutBets: ["H", "A", "HA"],
+      color: "blue",
+    },
+    {
+      id: "expecting_home",
+      name: "🏠 Expecting Home Win",
+      description: "Keep Home, HD (1X), HA (12). Cash out D, A, AD",
+      keepBets: ["H", "HD", "HA"],
+      cashoutBets: ["D", "A", "AD"],
+      color: "green",
+    },
+    {
+      id: "expecting_away",
+      name: "✈️ Expecting Away Win",
+      description: "Keep Away, AD (X2), HA (12). Cash out H, D, HD",
+      keepBets: ["A", "AD", "HA"],
+      cashoutBets: ["H", "D", "HD"],
+      color: "red",
+    },
+    {
+      id: "no_draw",
+      name: "🚫 Draw Unlikely",
+      description: "Keep Home, Away, HA (12). Cash out D, HD, AD",
+      keepBets: ["H", "A", "HA"],
+      cashoutBets: ["D", "HD", "AD"],
+      color: "purple",
+    },
+    {
+      id: "safe_exit",
+      name: "💰 Safe Exit (50%)",
+      description: "Cash out 50% of all positions to secure profit",
+      partial: 0.5,
+      color: "yellow",
+    },
+    {
+      id: "full_cashout",
+      name: "🛑 Full Cashout",
+      description: "Exit all positions immediately",
+      partial: 1.0,
+      color: "orange",
+    },
+    {
+      id: "custom",
+      name: "⚙️ Custom Selection",
+      description: "Manually select which bets to cash out",
+      custom: true,
+      color: "gray",
+    },
+  ];
+
+  // ============================================
+  // CALCULATE SCENARIO VALUE
+  // ============================================
+  const calculateScenarioValue = (scenario) => {
+    if (scenario.custom) return null;
+
+    if (scenario.partial) {
+      // Partial cashout - estimate current value
+      const estimatedCurrentValue = totalStake * 1.3; // Assume 30% profit in-play
+      return estimatedCurrentValue * scenario.partial;
+    }
+
+    // Strategic cashout - sum of cashed out stakes
+    let cashoutValue = 0;
+    individualStakes.forEach((stake) => {
+      if (scenario.cashoutBets?.includes(stake.betType)) {
+        // Estimate cashout at 70% of potential payout
+        cashoutValue += stake.stake * stake.odds * 0.7;
+      }
+    });
+
+    return cashoutValue;
+  };
+
+  // ============================================
+  // HANDLE SCENARIO SELECTION
+  // ============================================
+  const handleScenarioSelect = (scenario) => {
+    if (scenario.custom) {
+      setCashoutScenario(scenario);
+      setSelectedBets([]);
+      return;
+    }
+
+    setCashoutScenario(scenario);
+
+    if (scenario.cashoutBets) {
+      // Select specific bets to cash out
+      const toSelect = individualStakes
+        .filter((s) => scenario.cashoutBets.includes(s.betType))
+        .map((s) => s.betId);
+      setSelectedBets(toSelect);
+    } else if (scenario.partial) {
+      // Select all bets for partial cashout
+      setSelectedBets(individualStakes.map((s) => s.betId));
+    }
+  };
+
+  // ============================================
+  // EXECUTE CASHOUT
+  // ============================================
+  const executeCashout = async () => {
+    if (!cashoutScenario) {
+      toast.error("Select a cashout scenario");
+      return;
+    }
+
+    if (cashoutScenario.custom && selectedBets.length === 0) {
+      toast.error("Select at least one bet to cash out");
+      return;
+    }
+
+    let cashoutAmount;
+
+    if (cashoutScenario.partial) {
+      // Use custom amount for partial/full cashout
+      cashoutAmount = parseFloat(customAmount);
+      if (isNaN(cashoutAmount) || cashoutAmount <= 0) {
+        toast.error("Enter valid cashout amount");
+        return;
+      }
+    } else {
+      // Calculate from selected bets
+      cashoutAmount = selectedBets.reduce((sum, betId) => {
+        const stake = individualStakes.find((s) => s.betId === betId);
+        return sum + (stake ? stake.stake * stake.odds * 0.7 : 0);
+      }, 0);
+    }
+
+    if (!confirm(
+      `Confirm cashout?\n\n` +
+      `Cashout: ${cashoutAmount.toFixed(2)}\n` +
+      `Original stake: ${totalStake.toFixed(2)}\n` +
+      `Net: ${(cashoutAmount - totalStake).toFixed(2)}\n\n` +
+      `Keeping: ${individualStakes.length - selectedBets.length} bet(s)`
+    )) {
+      return;
+    }
+
+    setProcessing(true);
+    try {
+      const netFromCashout = await cashoutBet(bet.id, cashoutAmount);
+
+      if (netFromCashout > 0) {
+        await addWinnings(netFromCashout);
+        toast.success(`💰 Cashed out! +${netFromCashout.toFixed(2)}`);
+      } else if (netFromCashout < 0) {
+        toast.warning(`Cashed out at loss: ${netFromCashout.toFixed(2)}`);
+      } else {
+        toast.info("Cashed out break-even");
+      }
+
+      onComplete();
+    } catch (err) {
+      console.error("Cashout failed:", err);
+      toast.error("Cashout failed: " + err.message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {/* Bet Summary */}
+      <div className="bg-gray-50 rounded-lg p-3 border">
+        <h4 className="font-semibold mb-2">Current Position</h4>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div>
+            <div className="text-gray-600">Total Stake</div>
+            <div className="font-bold">{totalStake.toFixed(2)}</div>
+          </div>
+          <div>
+            <div className="text-gray-600">Active Bets</div>
+            <div className="font-bold">{individualStakes.length}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Scenario Selection */}
+      <div>
+        <h4 className="font-semibold mb-2">Choose Cashout Strategy</h4>
+        <div className="space-y-2 max-h-64 overflow-y-auto">
+          {scenarios.map((scenario) => {
+            const value = calculateScenarioValue(scenario);
+            const isSelected = cashoutScenario?.id === scenario.id;
+
+            return (
+              <button
+                key={scenario.id}
+                onClick={() => handleScenarioSelect(scenario)}
+                className={`w-full text-left p-3 rounded-lg border-2 transition ${
+                  isSelected
+                    ? `border-${scenario.color}-500 bg-${scenario.color}-50`
+                    : "border-gray-200 hover:border-gray-300"
+                }`}
+              >
+                <div className="flex justify-between items-start mb-1">
+                  <div className="font-medium">{scenario.name}</div>
+                  {value && (
+                    <div className="text-sm font-bold text-green-600">
+                      ~{value.toFixed(2)}
+                    </div>
+                  )}
+                </div>
+                <div className="text-xs text-gray-600">{scenario.description}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Custom Selection */}
+      {cashoutScenario?.custom && (
+        <div>
+          <h4 className="font-semibold mb-2">Select Bets to Cash Out</h4>
+          <div className="space-y-2 max-h-48 overflow-y-auto">
+            {individualStakes.map((stake) => (
+              <label
+                key={stake.betId}
+                className="flex items-center p-2 rounded border hover:bg-gray-50 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedBets.includes(stake.betId)}
+                  onChange={(e) => {
+                    if (e.target.checked) {
+                      setSelectedBets([...selectedBets, stake.betId]);
+                    } else {
+                      setSelectedBets(selectedBets.filter((id) => id !== stake.betId));
+                    }
+                  }}
+                  className="mr-3"
+                />
+                <div className="flex-1">
+                  <div className="text-sm font-medium">
+                    {stake.matchName}: {stake.label}
+                  </div>
+                  <div className="text-xs text-gray-600">
+                    Stake: {stake.stake.toFixed(2)} @ {stake.odds.toFixed(2)}
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Amount Input for Partial/Full Cashout */}
+      {cashoutScenario?.partial && (
+        <div>
+          <label className="block text-sm font-medium mb-2">
+            Cashout Amount
+          </label>
+          <input
+            type="number"
+            value={customAmount}
+            onChange={(e) => setCustomAmount(e.target.value)}
+            placeholder="Enter amount"
+            className="w-full border p-3 rounded"
+            min="0"
+            step="0.01"
+          />
+          <div className="text-xs text-gray-500 mt-1">
+            Suggested: {calculateScenarioValue(cashoutScenario)?.toFixed(2) || "N/A"}
+          </div>
+        </div>
+      )}
+
+      {/* Preview */}
+      {cashoutScenario && !cashoutScenario.custom && !cashoutScenario.partial && (
+        <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
+          <div className="text-sm font-medium mb-2">Preview</div>
+          <div className="space-y-1 text-xs">
+            <div>
+              <span className="text-green-600 font-medium">Keeping:</span>{" "}
+              {individualStakes
+                .filter((s) => !selectedBets.includes(s.betId))
+                .map((s) => s.label)
+                .join(", ")}
+            </div>
+            <div>
+              <span className="text-red-600 font-medium">Cashing out:</span>{" "}
+              {individualStakes
+                .filter((s) => selectedBets.includes(s.betId))
+                .map((s) => s.label)
+                .join(", ")}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Execute Button */}
+      <button
+        onClick={executeCashout}
+        disabled={processing || !cashoutScenario}
+        className="w-full px-4 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
+      >
+        {processing ? "Processing..." : "💰 Execute Cashout"}
+      </button>
+    </div>
+  );
+}
+
+// Helper functions
+function getOddsForBet(match, betType) {
+  if (!match) return 1.0;
+  const oddsMap = {
+    H: match.home,
+    D: match.draw,
+    A: match.away,
+    HD: match.hd,
+    AD: match.ad,
+    HA: match.ha,
+  };
+  return parseFloat(oddsMap[betType]) || 1.0;
+}
+
+function getBetLabel(betType) {
+  const labels = {
+    H: "Home Win (1)",
+    D: "Draw (X)",
+    A: "Away Win (2)",
+    HD: "Home/Draw (1X)",
+    AD: "Away/Draw (X2)",
+    HA: "Home/Away (12)",
+  };
+  return labels[betType] || betType;
+}
+
+
+// defensive_ui/src/components/MatchResultsEntry.jsx
+// ✅ ENHANCED: Support for accumulator bets + better UI
+import React, { useState, useEffect } from "react";
+import {
+  getPlacedUnresolvedBets,
+  recordMatchResults,
+  cashoutBet,
+} from "../utils/db";
+import { useToast } from "./Toast";
+import { useBankroll } from "../context/BankrollContext";
+import EnhancedCashout from "./EnhancedCashout";
+
+export default function MatchResultsEntry() {
+  const [unresolvedBets, setUnresolvedBets] = useState([]);
+  const [selectedBet, setSelectedBet] = useState(null);
+  const [results, setResults] = useState({});
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [cashoutMode, setCashoutMode] = useState(false);
+  const [cashoutAmount, setCashoutAmount] = useState("");
+
+  const toast = useToast();
+  const { addWinnings } = useBankroll();
+
+  useEffect(() => {
+    loadUnresolvedBets();
+  }, []);
+
+  const loadUnresolvedBets = async () => {
+    setLoading(true);
+    try {
+      const bets = await getPlacedUnresolvedBets();
+      setUnresolvedBets(bets);
+    } catch (err) {
+      console.error("Failed to load unresolved bets:", err);
+      toast.error("Failed to load pending bets");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBetSelect = (bet) => {
+    setSelectedBet(bet);
+    setCashoutMode(false);
+    setCashoutAmount("");
+
+    // Initialize results object
+    const initial = {};
+    bet.matches?.forEach((_, idx) => (initial[idx] = null));
+    setResults(initial);
+  };
+
+  const handleResultChange = (idx, result) => {
+    setResults((prev) => ({
+      ...prev,
+      [idx]: result,
+    }));
+  };
+
+  // ============================================
+  // ✅ ENHANCED: Handle accumulator results
+  // ============================================
+  const handleSubmitResults = async () => {
+    if (!selectedBet) return;
+
+    const allSelected = Object.values(results).every((r) => r !== null);
+    if (!allSelected) {
+      toast.warning("Please select results for every match");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      let actualNet;
+
+      // ✅ Check if this is an accumulator bet
+      if (selectedBet.strategy === "accumulator" && selectedBet.accumulatorData) {
+        actualNet = calculateAccumulatorNet(selectedBet, results);
+      } else {
+        // Regular defensive bet
+        actualNet = await recordMatchResults(selectedBet.id, results);
+      }
+
+      // Add NET to bankroll (stake already deducted)
+      if (actualNet > 0) {
+        await addWinnings(actualNet);
+        toast.success(`🎉 Win! +${actualNet.toFixed(2)} added to bankroll`);
+      } else if (actualNet < 0) {
+        toast.error(`😔 Loss: ${actualNet.toFixed(2)}`);
+      } else {
+        toast.info("Break even - no net change");
+      }
+
+      await loadUnresolvedBets();
+      setSelectedBet(null);
+      setResults({});
+    } catch (err) {
+      console.error("Failed to record results:", err);
+      toast.error("Failed to record results: " + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ✅ Calculate accumulator net
+  const calculateAccumulatorNet = (bet, matchResults) => {
+    const { selections } = bet.accumulatorData;
+    const stakeAmount = bet.stakes?.ACCA || 0;
+    
+    // Check if ALL legs won
+    let allWon = true;
+    for (const [matchIdx, selection] of Object.entries(selections)) {
+      const actualResult = matchResults[matchIdx];
+      
+      // Check if this leg won
+      const legWon = checkLegWon(selection, actualResult);
+      
+      if (!legWon) {
+        allWon = false;
+        break;
+      }
+    }
+
+    if (allWon) {
+      // All legs won - return payout minus stake
+      const payout = stakeAmount * bet.accumulatorData.totalOdds;
+      return payout - stakeAmount;
+    } else {
+      // Lost - return negative stake
+      return -stakeAmount;
+    }
+  };
+
+  // Check if accumulator leg won
+  const checkLegWon = (selection, actualResult) => {
+    if (!actualResult) return false;
+
+    if (selection === "H") return actualResult === "H";
+    if (selection === "D") return actualResult === "D";
+    if (selection === "A") return actualResult === "A";
+    if (selection === "HD") return actualResult === "H" || actualResult === "D";
+    if (selection === "AD") return actualResult === "A" || actualResult === "D";
+    if (selection === "HA") return actualResult === "H" || actualResult === "A";
+
+    return false;
+  };
+
+  // ============================================
+  // CASHOUT
+  // ============================================
+  const handleCashout = async () => {
+    if (!selectedBet || !cashoutAmount) {
+      toast.warning("Enter cashout amount");
+      return;
+    }
+
+    const amount = parseFloat(cashoutAmount);
+    if (isNaN(amount) || amount <= 0) {
+      toast.error("Invalid cashout amount");
+      return;
+    }
+
+    const totalStake = selectedBet.strategy === "accumulator" 
+      ? (selectedBet.stakes?.ACCA || 0)
+      : Object.values(selectedBet.stakes || {}).reduce((sum, s) => sum + s, 0);
+
+    if (
+      !confirm(
+        `Cashout for ${amount.toFixed(2)}?\n\n` +
+        `Original stake: ${totalStake.toFixed(2)}\n` +
+        `Net: ${amount >= 0 ? "+" : ""}${(amount - totalStake).toFixed(2)}`
+      )
+    ) {
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const netFromCashout = await cashoutBet(selectedBet.id, amount);
+
+      if (netFromCashout > 0) {
+        await addWinnings(netFromCashout);
+        toast.success(`💰 Cashed out! +${netFromCashout.toFixed(2)}`);
+      } else if (netFromCashout < 0) {
+        toast.warning(`Cashed out at loss: ${netFromCashout.toFixed(2)}`);
+      } else {
+        toast.info("Cashed out break-even");
+      }
+
+      await loadUnresolvedBets();
+      setSelectedBet(null);
+      setCashoutMode(false);
+      setCashoutAmount("");
+    } catch (err) {
+      console.error("Cashout failed:", err);
+      toast.error("Cashout failed: " + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  // ============================================
+  // RENDER
+  // ============================================
+  if (loading) {
+    return (
+      <div className="bg-white p-5 rounded-xl shadow-md">
+        <p className="text-gray-500 text-center">Loading pending bets...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-white p-5 rounded-xl shadow-md">
+      <h2 className="text-lg font-semibold mb-4">🎯 Record Match Results</h2>
+
+      {unresolvedBets.length === 0 ? (
+        <div className="text-center py-12">
+          <div className="text-6xl mb-4">🎉</div>
+          <p className="text-xl font-semibold text-gray-700 mb-2">
+            All bets resolved!
+          </p>
+          <p className="text-gray-500">
+            No pending bets. Place new bets in the Solver or Accumulator tabs.
+          </p>
+        </div>
+      ) : (
+        <div className="grid md:grid-cols-2 gap-4">
+          {/* Left - Bets list */}
+          <div className="border rounded-lg p-3 bg-gray-50 max-h-96 overflow-y-auto">
+            <h3 className="font-medium mb-3">
+              Pending Bets ({unresolvedBets.length})
+            </h3>
+
+            <div className="space-y-2">
+              {unresolvedBets.map((bet) => {
+                const totalStake = bet.strategy === "accumulator"
+                  ? (bet.stakes?.ACCA || 0)
+                  : Object.values(bet.stakes || {}).reduce((sum, s) => sum + s, 0);
+
+                return (
+                  <div
+                    key={bet.id}
+                    onClick={() => handleBetSelect(bet)}
+                    className={`border rounded p-3 cursor-pointer transition ${
+                      selectedBet?.id === bet.id
+                        ? "bg-blue-100 border-blue-500"
+                        : "bg-white hover:bg-gray-100"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <div className="text-xs text-gray-500">
+                        {new Date(bet.timestamp).toLocaleString()}
+                      </div>
+                      {/* ✅ Strategy Badge */}
+                      <span className={`text-xs px-2 py-0.5 rounded font-medium ${
+                        bet.strategy === "accumulator" 
+                          ? "bg-purple-100 text-purple-700"
+                          : "bg-blue-100 text-blue-700"
+                      }`}>
+                        {bet.strategy === "accumulator" ? "🎲 ACCA" : "📊 Singles"}
+                      </span>
+                    </div>
+
+                    <div className="text-sm font-medium mb-1">
+                      {bet.matches?.map((m) => m.name || m.id).join(" • ")}
+                    </div>
+
+                    {/* ✅ Show accumulator details */}
+                    {bet.strategy === "accumulator" && bet.accumulatorData && (
+                      <div className="text-xs text-purple-600 mb-1">
+                        {bet.accumulatorData.legs?.length} legs @ {bet.accumulatorData.totalOdds}x
+                      </div>
+                    )}
+
+                    <div className="flex justify-between text-xs text-gray-600">
+                      <span>Stake: {totalStake.toFixed(2)}</span>
+                      {bet.strategy === "accumulator" ? (
+                        <span>Win: {(totalStake * bet.accumulatorData?.totalOdds).toFixed(2)}</span>
+                      ) : (
+                        <span>R: {bet.R?.toFixed(3)}</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Right - Results or Cashout */}
+          <div className="border rounded-lg p-3 bg-gray-50">
+            {!selectedBet ? (
+              <p className="text-gray-500 text-center py-12">
+                ← Select a bet to continue
+              </p>
+            ) : (
+              <div>
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="font-medium">
+                    {cashoutMode ? "💰 Cashout" : "📝 Enter Results"}
+                  </h3>
+
+                  <button
+                    onClick={() => setCashoutMode(!cashoutMode)}
+                    className={`text-sm px-3 py-1 rounded transition ${
+                      cashoutMode
+                        ? "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                        : "bg-orange-100 text-orange-700 hover:bg-orange-200"
+                    }`}
+                  >
+                    {cashoutMode ? "📋 Results" : "💰 Cashout"}
+                  </button>
+                </div>
+
+                {/* ✅ Show accumulator legs if applicable */}
+                {selectedBet.strategy === "accumulator" && selectedBet.accumulatorData && !cashoutMode && (
+                  <div className="bg-purple-50 border border-purple-200 rounded p-3 mb-3 text-sm">
+                    <div className="font-medium mb-2">🎲 Accumulator Bet</div>
+                    <div className="space-y-1">
+                      {selectedBet.accumulatorData.legs?.map((leg, i) => (
+                        <div key={i} className="flex justify-between">
+                          <span>{leg.match}: {leg.selection}</span>
+                          <span className="font-medium">{leg.odds}x</span>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="mt-2 pt-2 border-t text-purple-700 font-medium">
+                      Total Odds: {selectedBet.accumulatorData.totalOdds}x
+                    </div>
+                    <div className="text-xs text-purple-600 mt-1">
+                      ⚠️ All legs must win for payout
+                    </div>
+                  </div>
+                )}
+
+                {cashoutMode ? (
+                  // CASHOUT MODE
+                  <div>
+                    <p className="text-sm text-gray-600 mb-3">
+                      Enter bookmaker cashout offer:
+                    </p>
+
+                    <input
+                      type="number"
+                      value={cashoutAmount}
+                      onChange={(e) => setCashoutAmount(e.target.value)}
+                      placeholder="Cashout amount"
+                      className="w-full border p-3 rounded mb-3"
+                      min="0"
+                      step="0.01"
+                    />
+
+                    <div className="text-xs text-gray-500 mb-4">
+                      Original stake:{" "}
+                      {selectedBet.strategy === "accumulator"
+                        ? (selectedBet.stakes?.ACCA || 0).toFixed(2)
+                        : Object.values(selectedBet.stakes || {})
+                            .reduce((s, x) => s + x, 0)
+                            .toFixed(2)}
+                    </div>
+
+                    <button
+                      onClick={handleCashout}
+                      disabled={submitting || !cashoutAmount}
+                      className="w-full px-4 py-3 bg-orange-600 text-white rounded hover:bg-orange-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
+                    >
+                      {submitting ? "Processing..." : "💰 Confirm Cashout"}
+                    </button>
+                  </div>
+                ) : (
+                  // RESULTS MODE
+                  <div>
+                    <div className="space-y-4 mb-6">
+                      {selectedBet.matches?.map((match, idx) => (
+                        <div
+                          key={idx}
+                          className="border rounded-lg p-3 bg-white"
+                        >
+                          <div className="font-medium mb-2">
+                            {match.name || `Match ${idx + 1}`}
+                          </div>
+
+                          <div className="grid grid-cols-3 gap-2">
+                            {[
+                              { label: "Home (1)", value: "H" },
+                              { label: "Draw (X)", value: "D" },
+                              { label: "Away (2)", value: "A" },
+                            ].map(({ label, value }) => (
+                              <button
+                                key={value}
+                                onClick={() => handleResultChange(idx, value)}
+                                className={`px-3 py-2 rounded text-sm font-medium transition ${
+                                  results[idx] === value
+                                    ? "bg-blue-600 text-white"
+                                    : "bg-gray-200 hover:bg-gray-300"
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <button
+                      onClick={handleSubmitResults}
+                      disabled={
+                        submitting ||
+                        !Object.values(results).every((r) => r !== null)
+                      }
+                      className="w-full px-4 py-3 bg-green-600 text-white rounded hover:bg-green-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed font-medium"
+                    >
+                      {submitting ? "Recording..." : "✅ Submit Results"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// defensive_ui/src/App.jsx
+// ✅ Updated with new header and full-screen responsive layout
+import React, { useState } from "react";
+import SolverForm from "./components/SolverForm";
+import AIAdvisorStep from "./components/AIAdvisorStep";
+import BetPlacementStep from "./components/BetPlacementStep";
+import ServerStatus from "./components/ServerStatus";
+import BetwayPanel from "./components/BetwayPanel";
+import BetHistoryPanel from "./components/BetHistoryPanel";
+import StatisticsDashboard from "./components/StatisticsDashboard";
+import ImportExportPanel from "./components/ImportExportPanel";
+import MatchResultsEntry from "./components/MatchResultsEntry";
+import AccumulatorBuilder from "./components/AccumulatorBuilder";
+
+export default function App() {
+  // Workflow state
+  const [currentStep, setCurrentStep] = useState(1);
+  const [solverData, setSolverData] = useState(null);
+  const [betPlan, setBetPlan] = useState(null);
+  const [activeTab, setActiveTab] = useState("solver");
+
+  // ============================================
+  // STEP 1: Solver completed
+  // ============================================
+  const handleSolved = (solution, bets, matches, budget) => {
+    setSolverData({ solution, bets, matches, budget });
+    setCurrentStep(2);
+  };
+
+  // ============================================
+  // STEP 2: AI Advisor - Place individual bets
+  // ============================================
+  const handlePlaceBets = (plan) => {
+    setBetPlan(plan);
+    setCurrentStep(3);
+  };
+
+  // ============================================
+  // STEP 2: AI Advisor - Build accumulator
+  // ============================================
+  const handleBuildAccumulator = (data) => {
+    setActiveTab("accumulator");
+    setCurrentStep(1);
+  };
+
+  // ============================================
+  // STEP 3: Placement complete
+  // ============================================
+  const handlePlacementComplete = () => {
+    setSolverData(null);
+    setBetPlan(null);
+    setCurrentStep(1);
+    setActiveTab("results");
+  };
+
+  // ============================================
+  // TAB NAVIGATION
+  // ============================================
+  const tabs = [
+    { id: "solver", label: "⚡ Solver", icon: "⚡" },
+    { id: "accumulator", label: "🎲 Acca", icon: "🎲" },
+    { id: "results", label: "🎯 Results", icon: "🎯" },
+    { id: "history", label: "📜 History", icon: "📜" },
+    { id: "stats", label: "📊 Stats", icon: "📊" },
+    { id: "settings", label: "⚙️ Settings", icon: "⚙️" },
+  ];
+
+  return (
+    <div className="h-screen flex flex-col bg-gradient-to-br from-gray-50 to-gray-100 overflow-hidden">
+      {/* ============================================ */}
+      {/* UPDATED HEADER - Sticky with Gradient */}
+      {/* ============================================ */}
+      <header className="sticky top-0 z-50 bg-gradient-to-r from-indigo-700 to-indigo-900 
+        text-white px-6 py-4 shadow-xl flex justify-between items-center 
+        border-b border-indigo-500/40 backdrop-blur-lg">
+        
+        <div className="flex items-center gap-3">
+          <div className="bg-white/10 px-3 py-1 rounded-lg text-sm font-semibold shadow-inner 
+            border border-white/20">
+            ProfitShield
+          </div>
+          <h1 className="text-lg font-semibold tracking-wide drop-shadow-sm">
+            Betting Intelligence Suite
+          </h1>
+        </div>
+        <ServerStatus />
+      </header>
+
+      {/* ============================================ */}
+      {/* MAIN LAYOUT - Full Screen */}
+      {/* ============================================ */}
+      <div className="flex flex-1 overflow-hidden min-h-0">
+        {/* Left Panel - Main Content */}
+        <div className="w-full md:w-[60%] flex flex-col overflow-hidden">
+          {/* Tab Navigation - Sticky */}
+          <div className="flex-shrink-0 bg-white border-b shadow-sm">
+            <div className="flex gap-2 px-4 overflow-x-auto scrollbar-hide">
+              {tabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  onClick={() => {
+                    setActiveTab(tab.id);
+                    setCurrentStep(1);
+                    setSolverData(null);
+                    setBetPlan(null);
+                  }}
+                  className={`px-4 py-3 text-sm font-medium transition whitespace-nowrap relative ${
+                    activeTab === tab.id
+                      ? "text-indigo-600"
+                      : "text-gray-500 hover:text-gray-700"
+                  }`}
+                >
+                  {tab.label}
+                  {activeTab === tab.id && (
+                    <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600"></div>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Content Area - Scrollable */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-4">
+            {/* ============================================ */}
+            {/* SOLVER TAB - 3-STEP WORKFLOW */}
+            {/* ============================================ */}
+            {activeTab === "solver" && (
+              <>
+                {/* Progress Indicator */}
+                <div className="bg-white rounded-xl shadow-md p-4">
+                  <div className="flex items-center justify-between">
+                    {[
+                      { num: 1, label: "Calculate", active: currentStep === 1 },
+                      { num: 2, label: "Analyze", active: currentStep === 2 },
+                      { num: 3, label: "Place", active: currentStep === 3 },
+                    ].map((step, idx) => (
+                      <React.Fragment key={step.num}>
+                        <div className="flex flex-col items-center">
+                          <div
+                            className={`w-10 h-10 rounded-full flex items-center justify-center font-bold transition-all ${
+                              step.active
+                                ? "bg-indigo-600 text-white shadow-lg scale-110"
+                                : currentStep > step.num
+                                ? "bg-green-500 text-white"
+                                : "bg-gray-300 text-gray-600"
+                            }`}
+                          >
+                            {currentStep > step.num ? "✓" : step.num}
+                          </div>
+                          <div className="text-xs mt-1 font-medium">{step.label}</div>
+                        </div>
+                        {idx < 2 && (
+                          <div
+                            className={`flex-1 h-1 mx-2 rounded transition-all ${
+                              currentStep > step.num
+                                ? "bg-green-500"
+                                : "bg-gray-300"
+                            }`}
+                          />
+                        )}
+                      </React.Fragment>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Step 1: Solver */}
+                {currentStep === 1 && <SolverForm onSolved={handleSolved} />}
+
+                {/* Step 2: AI Advisor */}
+                {currentStep === 2 && solverData && (
+                  <AIAdvisorStep
+                    solution={solverData.solution}
+                    matches={solverData.matches}
+                    bets={solverData.bets}
+                    budget={solverData.budget}
+                    onPlaceBets={handlePlaceBets}
+                    onBuildAccumulator={handleBuildAccumulator}
+                  />
+                )}
+
+                {/* Step 3: Place Bets */}
+                {currentStep === 3 && betPlan && (
+                  <BetPlacementStep
+                    betPlan={betPlan}
+                    onComplete={handlePlacementComplete}
+                  />
+                )}
+              </>
+            )}
+
+            {/* ============================================ */}
+            {/* OTHER TABS */}
+            {/* ============================================ */}
+            {activeTab === "accumulator" && (
+              <AccumulatorBuilder 
+                matches={solverData?.matches || []} 
+              />
+            )}
+
+            {activeTab === "results" && <MatchResultsEntry />}
+
+            {activeTab === "history" && <BetHistoryPanel />}
+
+            {activeTab === "stats" && <StatisticsDashboard />}
+
+            {activeTab === "settings" && <ImportExportPanel />}
+          </div>
+        </div>
+
+        {/* Right Panel - Betway (Hidden on mobile) */}
+        <div className="hidden md:flex md:w-[40%] flex-col bg-white border-l border-gray-200 overflow-hidden">
+          <BetwayPanel />
+        </div>
+      </div>
+    </div>
+  );
+}

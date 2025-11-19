@@ -1,5 +1,5 @@
 // defensive_ui/src/components/AIAdvisorStep.jsx
-// ✅ ENHANCED: Clickable recommendations with hover tooltips
+// ✅ ENHANCED: Clickable recommendations with hover tooltips & full accumulator support
 import React, { useState, useEffect } from "react";
 import { useToast } from "./Toast";
 
@@ -12,7 +12,7 @@ export default function AIAdvisorStep({
   budget,
   onPlaceBets,
   onBuildAccumulator,
-  onBack // ✅ NEW: Back button callback
+  onBack
 }) {
   const [selectedOutcomes, setSelectedOutcomes] = useState([]);
   const [recommendations, setRecommendations] = useState(null);
@@ -22,9 +22,7 @@ export default function AIAdvisorStep({
 
   // Auto-analyze on mount
   useEffect(() => {
-    if (solution && matches) {
-      analyzeOutcomes();
-    }
+    if (solution && matches) analyzeOutcomes();
   }, [solution, matches]);
 
   const analyzeOutcomes = async () => {
@@ -59,8 +57,8 @@ export default function AIAdvisorStep({
   };
 
   const toggleOutcome = (index) => {
-    setSelectedOutcomes(prev => 
-      prev.includes(index) 
+    setSelectedOutcomes(prev =>
+      prev.includes(index)
         ? prev.filter(i => i !== index)
         : [...prev, index]
     );
@@ -71,54 +69,76 @@ export default function AIAdvisorStep({
       toast.error("No outcomes available");
       return;
     }
-    
+
     const sorted = solution.omega
       .map((outcome, idx) => ({ idx, net: solution.nets[idx] }))
       .sort((a, b) => b.net - a.net)
       .slice(0, 3)
       .map(o => o.idx);
-    
+
     setSelectedOutcomes(sorted);
     toast.success("Selected 3 best outcomes");
   };
 
-  // ✅ APPLY RECOMMENDATION - FIXED for multiple legs
+  // =============================================================
+  // ⭐ UPDATED: Robust accumulator leg-matching logic
+  // - Fuzzy matching
+  // - Match by ID fallback
+  // - Proper handling of all legs
+  // =============================================================
   const handleApplyRecommendation = (rec) => {
     if (rec.strategy === "Safe Accumulator" && rec.accumulator) {
-      // Build accumulator with ALL recommended selections
       const selections = {};
+
       rec.accumulator.legs.forEach((leg) => {
-        // Find match index by matching names
-        const matchIdx = matches.findIndex(m => 
-          (m.name || m.id) === leg.match
-        );
-        
+        const cleanedLegMatch = leg.match.toLowerCase().trim();
+
+        let matchIdx = matches.findIndex(m => {
+          const candidate = (m.name || m.id || "").toLowerCase().trim();
+          return candidate === cleanedLegMatch;
+        });
+
+        // Fallback 2 → substring match
+        if (matchIdx < 0) {
+          matchIdx = matches.findIndex(m => {
+            const candidate = (m.name || m.id || "").toLowerCase();
+            return candidate.includes(cleanedLegMatch);
+          });
+        }
+
+        // Fallback 3 → ID match
+        if (matchIdx < 0 && leg.match.startsWith("M")) {
+          const idx = Number(leg.match.replace("M", "")) - 1;
+          if (matches[idx]) matchIdx = idx;
+        }
+
         if (matchIdx >= 0) {
           selections[matchIdx] = leg.selection;
         }
       });
-      
-      toast.info(`Loading accumulator with ${rec.accumulator.legs.length} legs...`);
+
+      toast.info(`Loading accumulator with ${Object.keys(selections).length} legs...`);
+
       onBuildAccumulator({
         solution,
         matches,
         selectedOutcomes: [],
         budget,
         aiRecommendation: rec,
-        preSelectedLegs: selections // ✅ Pass ALL legs
+        preSelectedLegs: selections // ⭐ Pass validated full-leg set
       });
-    } else {
-      // Apply as individual bets - select best outcomes
-      selectBestOutcomes();
-      toast.success(`Applied: ${rec.strategy}`);
+
+      return;
     }
+
+    // Fallback: individual bet strategy
+    selectBestOutcomes();
+    toast.success(`Applied: ${rec.strategy}`);
   };
 
   const handlePlaceIndividualBets = () => {
-    if (selectedOutcomes.length === 0) {
-      toast.warning("Select at least 1 outcome for analysis");
-      return;
-    }
+    if (selectedOutcomes.length === 0)
+      return toast.warning("Select at least 1 outcome for analysis");
 
     onPlaceBets({
       solution,
@@ -131,10 +151,8 @@ export default function AIAdvisorStep({
   };
 
   const handleBuildAccumulator = () => {
-    if (selectedOutcomes.length === 0) {
-      toast.warning("Select outcomes to build accumulator");
-      return;
-    }
+    if (selectedOutcomes.length === 0)
+      return toast.warning("Select outcomes to build accumulator");
 
     onBuildAccumulator({
       solution,
@@ -150,12 +168,19 @@ export default function AIAdvisorStep({
 
   return (
     <div className="bg-white p-5 rounded-xl shadow-md mb-6">
+
+      {/* HEADER */}
       <div className="flex justify-between items-center mb-4">
         <h2 className="text-lg font-semibold">🤖 Step 2: AI Betting Advisor</h2>
-        {/* ✅ Back Button */}
+
+        {/* ⭐ UPDATED: Smarter Back Button */}
         {onBack && (
           <button
-            onClick={onBack}
+            onClick={() => {
+              setSelectedOutcomes([]);
+              setRecommendations(null);
+              onBack();
+            }}
             className="text-sm px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition"
           >
             ← Back to Calculator
@@ -163,23 +188,23 @@ export default function AIAdvisorStep({
         )}
       </div>
 
-      {/* Analysis Summary */}
+      {/* SUMMARY */}
       <div className="grid md:grid-cols-3 gap-4 mb-6">
-        <div className="border rounded-lg p-4 bg-gray-50">
+        <div className="border p-4 bg-gray-50 rounded-lg">
           <div className="text-sm text-gray-600 mb-1">Guaranteed Return</div>
           <div className={`text-2xl font-bold ${isGood ? "text-green-600" : "text-red-600"}`}>
             {solution.R?.toFixed(3)}
           </div>
         </div>
 
-        <div className="border rounded-lg p-4 bg-gray-50">
+        <div className="border p-4 bg-gray-50 rounded-lg">
           <div className="text-sm text-gray-600 mb-1">Possible Outcomes</div>
           <div className="text-2xl font-bold text-blue-600">
             {solution.omega?.length || 0}
           </div>
         </div>
 
-        <div className="border rounded-lg p-4 bg-gray-50">
+        <div className="border p-4 bg-gray-50 rounded-lg">
           <div className="text-sm text-gray-600 mb-1">Budget</div>
           <div className="text-2xl font-bold text-indigo-600">
             {budget.toFixed(2)}
@@ -187,29 +212,31 @@ export default function AIAdvisorStep({
         </div>
       </div>
 
-      {/* ✅ AI RECOMMENDATIONS - CLICKABLE WITH TOOLTIPS */}
+      {/* AI RECOMMENDATIONS */}
       {recommendations && recommendations.length > 0 && (
         <div className="border-t pt-6 mb-6">
           <h3 className="font-semibold mb-3">🎯 AI Recommendations (Click to Apply)</h3>
-          
+
           <div className="space-y-3">
             {recommendations.slice(0, 3).map((rec, idx) => (
-              <div 
-                key={idx} 
+              <div
+                key={idx}
                 className="relative"
                 onMouseEnter={() => setHoveredRec(idx)}
                 onMouseLeave={() => setHoveredRec(null)}
               >
                 <button
                   onClick={() => handleApplyRecommendation(rec)}
-                  className="w-full border-2 rounded-lg p-4 bg-gradient-to-r from-indigo-50 to-blue-50 hover:from-indigo-100 hover:to-blue-100 transition text-left relative"
+                  className="w-full border-2 rounded-lg p-4 bg-gradient-to-r from-indigo-50 to-blue-50 
+                             hover:from-indigo-100 hover:to-blue-100 text-left relative"
                 >
-                  <div className="flex justify-between items-start mb-2">
+                  <div className="flex justify-between items-start">
                     <div className="flex-1">
-                      <h4 className="font-semibold text-gray-800">{rec.strategy}</h4>
+                      <h4 className="font-semibold">{rec.strategy}</h4>
                       <p className="text-sm text-gray-600">{rec.description}</p>
                     </div>
-                    <div className="text-right ml-4">
+
+                    <div className="text-right ml-3">
                       <div className="text-xs text-gray-500">EV Rating</div>
                       <div className="text-lg font-bold text-green-600">
                         {rec.expected_value_rating}/10
@@ -218,28 +245,18 @@ export default function AIAdvisorStep({
                   </div>
 
                   {rec.accumulator && (
-                    <div className="text-sm text-indigo-700 mt-2 flex items-center gap-2">
-                      <span>🎲</span>
-                      <span>
-                        {rec.accumulator.num_legs} legs @ {rec.accumulator.total_odds}x odds 
-                        • {rec.accumulator.win_probability}% win chance
-                      </span>
+                    <div className="text-sm text-indigo-700 mt-2">
+                      🎲 {rec.accumulator.num_legs} legs @ {rec.accumulator.total_odds}x •{" "}
+                      {rec.accumulator.win_probability}% chance
                     </div>
                   )}
 
-                  {rec.suggested_stake && (
-                    <div className="text-sm text-purple-700 mt-2">
-                      💰 Suggested stake: {rec.suggested_stake.toFixed(2)}
-                    </div>
-                  )}
-
-                  {/* Click hint */}
                   <div className="absolute top-2 right-2 text-xs bg-blue-600 text-white px-2 py-1 rounded">
                     Click to Apply
                   </div>
                 </button>
 
-                {/* ✅ HOVER TOOLTIP */}
+                {/* ⭐ UPDATED: Stable hover tooltip */}
                 {hoveredRec === idx && (
                   <div className="absolute z-50 left-0 right-0 mt-2 bg-white border-2 border-indigo-500 rounded-lg shadow-xl p-4 text-sm">
                     <div className="font-semibold mb-2 text-indigo-700">
@@ -249,74 +266,43 @@ export default function AIAdvisorStep({
                     {rec.accumulator ? (
                       <div className="space-y-2">
                         <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <div className="text-xs text-gray-500">Total Odds</div>
-                            <div className="font-bold text-indigo-600">
-                              {rec.accumulator.total_odds}x
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500">Win Probability</div>
-                            <div className="font-bold text-green-600">
-                              {rec.accumulator.win_probability}%
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500">Risk Level</div>
-                            <div className={`font-bold ${
-                              rec.accumulator.risk_level === "Low" ? "text-green-600" :
-                              rec.accumulator.risk_level === "Medium" ? "text-yellow-600" :
-                              "text-red-600"
-                            }`}>
-                              {rec.accumulator.risk_level}
-                            </div>
-                          </div>
-                          <div>
-                            <div className="text-xs text-gray-500">Number of Legs</div>
-                            <div className="font-bold">{rec.accumulator.num_legs}</div>
-                          </div>
+                          <Tooltip stat="Total Odds" val={rec.accumulator.total_odds + "x"} />
+                          <Tooltip stat="Win Probability" val={rec.accumulator.win_probability + "%"} />
+                          <Tooltip stat="Risk Level" val={rec.accumulator.risk_level} />
+                          <Tooltip stat="Number of Legs" val={rec.accumulator.num_legs} />
                         </div>
 
-                        <div className="pt-2 border-t">
-                          <div className="text-xs text-gray-500 mb-1">Selections:</div>
+                        <div className="border-t pt-2 text-xs">
                           {rec.accumulator.legs.map((leg, i) => (
-                            <div key={i} className="flex justify-between text-xs">
+                            <div key={i} className="flex justify-between">
                               <span>{leg.match}: <b>{leg.selection}</b></span>
                               <span className="text-indigo-600">{leg.odds}x</span>
                             </div>
                           ))}
                         </div>
 
-                        <div className="pt-2 border-t text-xs text-gray-600">
-                          💡 Click to load this accumulator in the builder
+                        <div className="text-xs pt-2 border-t text-gray-600">
+                          💡 Click to load this accumulator
                         </div>
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        <div>
-                          <div className="text-xs text-gray-500">Strategy Type</div>
-                          <div className="font-medium">{rec.strategy}</div>
-                        </div>
+                        <Tooltip stat="Strategy Type" val={rec.strategy} />
+
                         {rec.bet_type && (
-                          <div>
-                            <div className="text-xs text-gray-500">Recommended Bet</div>
-                            <div className="font-medium text-indigo-600">{rec.bet_type}</div>
-                          </div>
+                          <Tooltip stat="Recommended Bet" val={rec.bet_type} />
                         )}
+
                         {rec.targets && (
-                          <div>
-                            <div className="text-xs text-gray-500 mb-1">Value Targets:</div>
-                            {rec.targets.map((target, i) => (
-                              <div key={i} className="text-xs bg-green-50 rounded p-1 mb-1">
-                                <div className="font-medium">{target.match}</div>
-                                <div className="text-gray-600">{target.reason}</div>
+                          <div className="border-t pt-2 text-xs">
+                            {rec.targets.map((t, i) => (
+                              <div key={i} className="bg-green-50 p-1 rounded mb-1">
+                                <b>{t.match}</b><br />
+                                <span className="text-gray-600">{t.reason}</span>
                               </div>
                             ))}
                           </div>
                         )}
-                        <div className="pt-2 border-t text-xs text-gray-600">
-                          💡 Click to select best outcomes for individual bets
-                        </div>
                       </div>
                     )}
                   </div>
@@ -327,17 +313,17 @@ export default function AIAdvisorStep({
         </div>
       )}
 
-      {/* Instructions */}
+      {/* OUTCOME SELECTION */}
       <div className="bg-yellow-50 border border-yellow-200 rounded p-3 mb-4 text-sm">
         <b>📋 Instructions:</b>
         <ol className="list-decimal ml-5 mt-2 space-y-1">
-          <li>Click an AI recommendation to apply it automatically, OR</li>
-          <li>Manually select 1-3 outcomes below to analyze</li>
-          <li>Choose: Place individual bets OR Build accumulator</li>
+          <li>Click an AI recommendation to apply it automatically</li>
+          <li>Or manually pick outcomes below</li>
+          <li>Choose single bets or accumulator</li>
         </ol>
       </div>
 
-      {/* Outcome Selection Grid */}
+      {/* OUTCOME BUTTON GRID */}
       <div className="mb-6">
         <div className="flex justify-between items-center mb-3">
           <h3 className="font-semibold">Select Outcomes to Analyze</h3>
@@ -363,7 +349,7 @@ export default function AIAdvisorStep({
               <div className="text-xs font-medium text-gray-600 mb-1">
                 Outcome {i + 1}
               </div>
-              
+
               <div className="text-sm mb-2">
                 {outcome.map((r, j) => (
                   <span key={j} className="mr-2">
@@ -374,10 +360,13 @@ export default function AIAdvisorStep({
 
               <div className="flex justify-between items-center">
                 <span className="text-xs text-gray-600">Net:</span>
-                <span className={`text-sm font-bold ${
-                  solution.nets[i] >= 0 ? "text-green-600" : "text-red-600"
-                }`}>
-                  {solution.nets[i] >= 0 ? "+" : ""}{solution.nets[i].toFixed(2)}
+                <span
+                  className={`text-sm font-bold ${
+                    solution.nets[i] >= 0 ? "text-green-600" : "text-red-600"
+                  }`}
+                >
+                  {solution.nets[i] >= 0 ? "+" : ""}
+                  {solution.nets[i].toFixed(2)}
                 </span>
               </div>
             </button>
@@ -385,7 +374,7 @@ export default function AIAdvisorStep({
         </div>
       </div>
 
-      {/* Strategy Selection */}
+      {/* STRATEGY CHOICE */}
       <div className="border-t pt-6">
         <h3 className="font-semibold mb-3">Choose Your Strategy</h3>
 
@@ -394,7 +383,7 @@ export default function AIAdvisorStep({
           <button
             onClick={handlePlaceIndividualBets}
             disabled={selectedOutcomes.length === 0}
-            className="border-2 rounded-lg p-6 text-left transition hover:border-blue-500 hover:bg-blue-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-300 disabled:hover:bg-white"
+            className="border-2 rounded-lg p-6 text-left transition hover:border-blue-500 hover:bg-blue-50 disabled:opacity-50"
           >
             <div className="text-3xl mb-2">📊</div>
             <h4 className="font-bold mb-2">Place Individual Bets</h4>
@@ -402,7 +391,7 @@ export default function AIAdvisorStep({
               Place separate bets on each market with calculated stakes
             </p>
             <div className="text-sm font-medium text-blue-600">
-              {selectedOutcomes.length} outcome{selectedOutcomes.length !== 1 ? "s" : ""} selected
+              {selectedOutcomes.length} selected
             </div>
           </button>
 
@@ -410,7 +399,7 @@ export default function AIAdvisorStep({
           <button
             onClick={handleBuildAccumulator}
             disabled={selectedOutcomes.length === 0}
-            className="border-2 rounded-lg p-6 text-left transition hover:border-purple-500 hover:bg-purple-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-gray-300 disabled:hover:bg-white"
+            className="border-2 rounded-lg p-6 text-left transition hover:border-purple-500 hover:bg-purple-50 disabled:opacity-50"
           >
             <div className="text-3xl mb-2">🎲</div>
             <h4 className="font-bold mb-2">Build Accumulator</h4>
@@ -423,6 +412,16 @@ export default function AIAdvisorStep({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// Simple tooltip key-value component
+function Tooltip({ stat, val }) {
+  return (
+    <div>
+      <div className="text-xs text-gray-500">{stat}</div>
+      <div className="font-bold">{val}</div>
     </div>
   );
 }

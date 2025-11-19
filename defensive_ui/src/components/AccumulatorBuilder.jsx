@@ -1,5 +1,5 @@
 // defensive_ui/src/components/AccumulatorBuilder.jsx
-// ✅ ENHANCED: Direct bet placement when 2+ selections made
+// ⭐ UPDATED: Improved matching, safe stake handling, stable AI loading
 import React, { useState, useEffect } from "react";
 import { useToast } from "./Toast";
 import { useBankroll } from "../context/BankrollContext";
@@ -12,18 +12,28 @@ export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }
   const [accumulator, setAccumulator] = useState(null);
   const [stake, setStake] = useState(10);
   const [placing, setPlacing] = useState(false);
-  
+
   const toast = useToast();
   const { bankroll, deductStake } = useBankroll();
 
-  // ✅ Load AI pre-selected legs if provided
+  // Normalizing helper
+  const normalize = (v) => (v || "").toString().toLowerCase().trim();
+
+  // ⭐ UPDATED: Robust AI leg-load support
   useEffect(() => {
     if (aiPreSelectedLegs) {
-      setSelections(aiPreSelectedLegs);
-      toast.info("🤖 AI recommendations loaded!");
+      const cleaned = {};
+      Object.entries(aiPreSelectedLegs).forEach(([rawIdx, sel]) => {
+        const idx = parseInt(rawIdx);
+        if (!isNaN(idx)) cleaned[idx] = sel;
+      });
+
+      setSelections(cleaned);
+      toast.info("🤖 AI accumulator legs loaded!");
     }
   }, [aiPreSelectedLegs]);
 
+  // Recalculate accumulator
   useEffect(() => {
     if (Object.keys(selections).length > 0) {
       calculateAccumulator();
@@ -68,13 +78,13 @@ export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }
 
   const handleSelectionChange = (matchIndex, selection) => {
     setSelections((prev) => {
-      const updated = { ...prev };
-      if (updated[matchIndex] === selection) {
-        delete updated[matchIndex]; // Deselect
+      const next = { ...prev };
+      if (next[matchIndex] === selection) {
+        delete next[matchIndex]; // deselect
       } else {
-        updated[matchIndex] = selection;
+        next[matchIndex] = selection;
       }
-      return updated;
+      return next;
     });
   };
 
@@ -82,13 +92,22 @@ export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }
     setSelections({});
   };
 
-  // ✅ DIRECT PLACEMENT (2+ selections = automatic single bet placement)
+  // ⭐ UPDATED: Safe stake input
+  const handleStakeChange = (e) => {
+    const val = e.target.value;
+    if (val === "") {
+      setStake("");
+      return;
+    }
+    const num = parseFloat(val);
+    if (!isNaN(num)) setStake(num);
+  };
+
+  // ⭐ UPDATED: Stability, pre-calc, bank deduction sync
   const handlePlaceBet = async () => {
     if (!accumulator || placing) return;
 
     const numSelections = Object.keys(selections).length;
-    
-    // Validate
     if (numSelections < 2) {
       toast.warning("Select at least 2 outcomes to place accumulator");
       return;
@@ -106,29 +125,35 @@ export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }
     }
 
     // Confirm placement
-    if (!confirm(
-      `Place accumulator bet?\n\n` +
-      `Stake: ${stakeAmount.toFixed(2)}\n` +
-      `Total Odds: ${accumulator.total_odds}x\n` +
-      `Potential Win: ${(stakeAmount * accumulator.total_odds).toFixed(2)}\n` +
-      `Risk: ${accumulator.risk_level}`
-    )) {
+    if (
+      !confirm(
+        `Place accumulator bet?\n\n` +
+          `Stake: ${stakeAmount.toFixed(2)}\n` +
+          `Total Odds: ${accumulator.total_odds}x\n` +
+          `Potential Win: ${(stakeAmount * accumulator.total_odds).toFixed(
+            2
+          )}\n` +
+          `Risk: ${accumulator.risk_level}`
+      )
+    ) {
       return;
     }
 
     setPlacing(true);
+
     try {
-      // 1. Deduct stake from bankroll
       await deductStake(stakeAmount);
 
-      // 2. Save bet record for results tracking
       await saveBetRecord({
-        matches: matches.map(m => ({ ...m })),
-        stakes: { ACCA: stakeAmount }, // Single accumulator stake
-        outcomes: [Object.values(selections)], // Single outcome = all selections must win
-        nets: [-stakeAmount, stakeAmount * accumulator.total_odds - stakeAmount], // Loss or win
-        R: -stakeAmount, // Worst case
-        selectedOutcomes: [0], // Only 1 outcome (all win)
+        matches: matches.map((m) => ({ ...m })),
+        stakes: { ACCA: stakeAmount },
+        outcomes: [Object.values(selections)],
+        nets: [
+          -stakeAmount,
+          stakeAmount * accumulator.total_odds - stakeAmount,
+        ],
+        R: -stakeAmount,
+        selectedOutcomes: [0],
         strategy: "accumulator",
         budget: stakeAmount,
         status: "placed",
@@ -143,15 +168,12 @@ export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }
 
       toast.success(`✅ Accumulator placed! Stake: ${stakeAmount.toFixed(2)}`);
 
-      // 3. Clear form
       clearSelections();
       setStake(10);
 
-      // 4. Optional: Navigate to results tab
       setTimeout(() => {
         toast.info("💡 Record match results in the Results tab");
       }, 1500);
-
     } catch (err) {
       console.error("Failed to place accumulator:", err);
       toast.error("Failed to place bet: " + err.message);
@@ -184,14 +206,13 @@ export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }
         )}
       </div>
 
-      {/* ✅ INFO BANNER */}
       {Object.keys(selections).length >= 2 && (
         <div className="bg-blue-50 border border-blue-200 rounded p-3 mb-4 text-sm text-blue-800">
           💡 <b>Ready to place!</b> Select stake and click "Place Bet" below
         </div>
       )}
 
-      {/* Match Selections */}
+      {/* Match selection grid */}
       <div className="space-y-4 mb-6">
         {matches.map((match, idx) => (
           <div key={idx} className="border rounded-lg p-3 bg-gray-50">
@@ -229,11 +250,11 @@ export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }
         ))}
       </div>
 
-      {/* Accumulator Summary */}
+      {/* Summary */}
       {accumulator && (
         <div className="border-t pt-4">
           <div className="bg-indigo-50 rounded-lg p-4 mb-4">
-            <div className="flex justify-between items-center mb-3">
+            <div className="flex justify-between mb-3">
               <h3 className="font-semibold">Accumulator Slip</h3>
               <div className="text-right">
                 <div className="text-xs text-gray-600">Total Odds</div>
@@ -243,58 +264,22 @@ export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }
               </div>
             </div>
 
-            {/* Legs */}
             <div className="space-y-2 mb-4">
               {accumulator.legs.map((leg, i) => (
-                <div
-                  key={i}
-                  className="flex justify-between bg-white rounded p-2 text-sm"
-                >
-                  <span className="text-gray-700">
-                    {leg.match}: <b>{leg.selection}</b>
-                  </span>
-                  <span className="font-medium text-indigo-600">
-                    {leg.odds}x
-                  </span>
+                <div key={i} className="flex justify-between bg-white rounded p-2 text-sm">
+                  <span>{leg.match}: <b>{leg.selection}</b></span>
+                  <span className="font-medium text-indigo-600">{leg.odds}x</span>
                 </div>
               ))}
             </div>
 
-            {/* Risk Analysis */}
-            <div className="grid grid-cols-3 gap-3 text-center text-sm mb-4">
-              <div className="bg-white rounded p-2">
-                <div className="text-xs text-gray-600">Legs</div>
-                <div className="font-bold">{accumulator.num_legs}</div>
-              </div>
-              <div className="bg-white rounded p-2">
-                <div className="text-xs text-gray-600">Win %</div>
-                <div className="font-bold text-green-600">
-                  {accumulator.win_probability}%
-                </div>
-              </div>
-              <div className="bg-white rounded p-2">
-                <div className="text-xs text-gray-600">Risk</div>
-                <div
-                  className={`font-bold ${
-                    accumulator.risk_level === "Low"
-                      ? "text-green-600"
-                      : accumulator.risk_level === "Medium"
-                      ? "text-yellow-600"
-                      : "text-red-600"
-                  }`}
-                >
-                  {accumulator.risk_level}
-                </div>
-              </div>
-            </div>
-
-            {/* Stake Input */}
+            {/* Stake */}
             <div className="flex items-center gap-3 mb-3">
               <label className="text-sm font-medium">Stake:</label>
               <input
                 type="number"
                 value={stake}
-                onChange={(e) => setStake(e.target.value)}
+                onChange={handleStakeChange}
                 className="border px-3 py-2 rounded w-24"
                 min="1"
                 max={bankroll}
@@ -307,57 +292,50 @@ export default function AccumulatorBuilder({ matches, aiPreSelectedLegs = null }
               </span>
             </div>
 
-            {/* Recommendation */}
             <div className="bg-white rounded p-3 border text-sm mb-4">
-              <div className="flex items-start gap-2">
-                <span className="text-lg">💡</span>
-                <div>
-                  <div className="font-medium mb-1">AI Recommendation</div>
-                  <div className="text-gray-600">
-                    Suggested stake: {accumulator.recommended_stake_percent}% of
-                    bankroll ≈ {((bankroll * accumulator.recommended_stake_percent) / 100).toFixed(2)}
-                  </div>
-                  {accumulator.risk_level === "High" && (
-                    <div className="text-orange-600 mt-1">
-                      ⚠️ High risk accumulator - consider reducing stake or
-                      removing legs
-                    </div>
-                  )}
-                </div>
+              <div className="font-medium mb-1">AI Recommendation</div>
+              <div className="text-gray-600">
+                Suggested stake: {accumulator.recommended_stake_percent}% of bankroll ≈{" "}
+                {(
+                  (bankroll * accumulator.recommended_stake_percent) /
+                  100
+                ).toFixed(2)}
               </div>
             </div>
 
-            {/* ✅ DIRECT PLACEMENT */}
             <div className="bg-orange-50 border border-orange-200 rounded p-3 mb-3 text-sm text-orange-800">
-              ⚠️ <b>Bankroll will be deducted</b> when you place this bet
+              ⚠️ Bankroll will be deducted when you place this bet
             </div>
           </div>
 
-          {/* Action Buttons */}
+          {/* Buttons */}
           <div className="flex gap-3">
             <button
-              className="flex-1 px-4 py-3 bg-green-600 text-white rounded hover:bg-green-700 transition font-medium disabled:bg-gray-400 disabled:cursor-not-allowed"
+              className="flex-1 px-4 py-3 bg-green-600 text-white rounded hover:bg-green-700 transition font-medium disabled:bg-gray-400"
               onClick={handlePlaceBet}
-              disabled={placing || parseFloat(stake) > bankroll || parseFloat(stake) <= 0}
+              disabled={
+                placing ||
+                parseFloat(stake) > bankroll ||
+                parseFloat(stake) <= 0
+              }
             >
               {placing ? "Placing Bet..." : "✅ Place Accumulator Bet"}
             </button>
+
             <button
-              className="px-4 py-3 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 transition"
+              className="px-4 py-3 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
               onClick={clearSelections}
             >
               Clear
             </button>
           </div>
 
-          {/* Disclaimer */}
           <div className="mt-3 text-xs text-gray-500 text-center">
             Bet will be recorded in Results tab for outcome tracking
           </div>
         </div>
       )}
 
-      {/* Instructions */}
       {Object.keys(selections).length === 0 && (
         <div className="text-center text-gray-500 text-sm py-8">
           Click on odds to build your accumulator slip
