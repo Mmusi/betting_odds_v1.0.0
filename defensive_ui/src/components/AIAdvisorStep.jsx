@@ -5,6 +5,88 @@ import { useToast } from "./Toast";
 
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:5001/api";
 
+
+// defensive_ui/src/components/AIAdvisorStep.jsx
+// ⭐ FIX: Robust accumulator leg matching with multiple fallback strategies
+
+const handleApplyRecommendation = (rec) => {
+  if (rec.strategy === "Safe Accumulator" && rec.accumulator) {
+    const selections = {};
+
+    rec.accumulator.legs.forEach((leg) => {
+      // Strategy 1: Normalize and exact match
+      const cleanedLegMatch = leg.match.toLowerCase().trim();
+      
+      let matchIdx = matches.findIndex(m => {
+        const candidate = (m.name || m.id || "").toLowerCase().trim();
+        return candidate === cleanedLegMatch;
+      });
+
+      // Strategy 2: Substring match (handles partial names)
+      if (matchIdx < 0) {
+        matchIdx = matches.findIndex(m => {
+          const candidate = (m.name || m.id || "").toLowerCase();
+          // Bidirectional substring check
+          return candidate.includes(cleanedLegMatch) || 
+                 cleanedLegMatch.includes(candidate);
+        });
+      }
+
+      // Strategy 3: Match ID parsing (e.g., "M1" → index 0)
+      if (matchIdx < 0 && /^M\d+$/i.test(leg.match)) {
+        const idx = parseInt(leg.match.substring(1)) - 1;
+        if (idx >= 0 && idx < matches.length) {
+          matchIdx = idx;
+        }
+      }
+
+      // Strategy 4: Positional match (leg order = match order)
+      if (matchIdx < 0) {
+        const legIndex = rec.accumulator.legs.indexOf(leg);
+        if (legIndex >= 0 && legIndex < matches.length) {
+          matchIdx = legIndex;
+          console.warn(`Fallback: Using positional match for leg ${legIndex}`);
+        }
+      }
+
+      if (matchIdx >= 0) {
+        selections[matchIdx] = leg.selection;
+      } else {
+        console.error(`Could not match leg: "${leg.match}" to any match`);
+        toast.warning(`Could not match "${leg.match}" - using position fallback`);
+      }
+    });
+
+    // Validate we got at least some matches
+    if (Object.keys(selections).length === 0) {
+      toast.error("Failed to match any accumulator legs to matches");
+      return;
+    }
+
+    toast.info(
+      `Loading accumulator with ${Object.keys(selections).length}/${
+        rec.accumulator.legs.length
+      } legs matched`
+    );
+
+    onBuildAccumulator({
+      solution,
+      matches,
+      selectedOutcomes: [],
+      budget,
+      aiRecommendation: rec,
+      preSelectedLegs: selections,
+    });
+
+    return;
+  }
+
+  // Fallback: individual bet strategy
+  selectBestOutcomes();
+  toast.success(`Applied: ${rec.strategy}`);
+};
+
+
 export default function AIAdvisorStep({ 
   solution, 
   matches, 

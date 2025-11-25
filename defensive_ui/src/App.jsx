@@ -15,24 +15,16 @@ import AccumulatorBuilder from "./components/AccumulatorBuilder";
 export default function App() {
   // Workflow state
   const [currentStep, setCurrentStep] = useState(1);
-  const [solverData, setSolverData] = useState(null); // { solution, bets, matches, budget }
+  const [solverData, setSolverData] = useState(null);
   const [betPlan, setBetPlan] = useState(null);
   const [activeTab, setActiveTab] = useState("solver");
-
-  // Holds AI pre-selected legs when user loads an AI recommendation into the AccumulatorBuilder
-  const [aiPreSelectedLegs, setAiPreSelectedLegs] = useState(null);
 
   // ============================================
   // STEP 1: Solver completed
   // ============================================
-  // SolverForm calls onSolved(solution, bets, matches, budget)
   const handleSolved = (solution, bets, matches, budget) => {
     setSolverData({ solution, bets, matches, budget });
     setCurrentStep(2);
-    // keep activeTab on solver flow
-    setActiveTab("solver");
-    // clear any previous ai pre-selections
-    setAiPreSelectedLegs(null);
   };
 
   // ============================================
@@ -41,27 +33,13 @@ export default function App() {
   const handlePlaceBets = (plan) => {
     setBetPlan(plan);
     setCurrentStep(3);
-    // Move user to placement step (still inside solver tab workflow)
-    setActiveTab("solver");
   };
 
   // ============================================
   // STEP 2: AI Advisor - Build accumulator
-  // Accepts object from AIAdvisorStep (may include preSelectedLegs)
   // ============================================
-  const handleBuildAccumulator = (data = {}) => {
-    // keep solver data so accumulator can read matches
-    // data may contain: preSelectedLegs, aiRecommendation, etc.
-    if (data.preSelectedLegs) {
-      setAiPreSelectedLegs(data.preSelectedLegs);
-    } else {
-      setAiPreSelectedLegs(null);
-    }
-
-    // open accumulator tab so user can review and place
+  const handleBuildAccumulator = (data) => {
     setActiveTab("accumulator");
-
-    // reset workflow step to start (not strictly necessary, but keeps UI consistent)
     setCurrentStep(1);
   };
 
@@ -69,19 +47,14 @@ export default function App() {
   // STEP 3: Placement complete
   // ============================================
   const handlePlacementComplete = () => {
-    // clear transient solver/betPlan state and go to Results
     setSolverData(null);
     setBetPlan(null);
-    setAiPreSelectedLegs(null);
     setCurrentStep(1);
     setActiveTab("results");
   };
 
   // ============================================
   // TAB NAVIGATION
-  // NOTE: Do NOT clear solverData/betPlan automatically when switching tabs.
-  // This preserves the workflow and allows moving between tabs without losing
-  // the current calculation context.
   // ============================================
   const tabs = [
     { id: "solver", label: "⚡ Solver", icon: "⚡" },
@@ -126,10 +99,10 @@ export default function App() {
                 <button
                   key={tab.id}
                   onClick={() => {
-                    // Switch tab but keep solver state intact
                     setActiveTab(tab.id);
                     setCurrentStep(1);
-                    // keep solverData & betPlan so user can continue workflow
+                    setSolverData(null);
+                    setBetPlan(null);
                   }}
                   className={`px-4 py-3 text-sm font-medium transition whitespace-nowrap relative ${
                     activeTab === tab.id
@@ -191,13 +164,7 @@ export default function App() {
                 </div>
 
                 {/* Step 1: Solver */}
-                {currentStep === 1 && (
-                  <SolverForm
-                    onSolved={(solution, bets, matches, budget) =>
-                      handleSolved(solution, bets, matches, budget)
-                    }
-                  />
-                )}
+                {currentStep === 1 && <SolverForm onSolved={handleSolved} />}
 
                 {/* Step 2: AI Advisor */}
                 {currentStep === 2 && solverData && (
@@ -208,7 +175,6 @@ export default function App() {
                     budget={solverData.budget}
                     onPlaceBets={handlePlaceBets}
                     onBuildAccumulator={handleBuildAccumulator}
-                    onBack={() => setCurrentStep(1)} // Back to calculator
                   />
                 )}
 
@@ -226,9 +192,8 @@ export default function App() {
             {/* OTHER TABS */}
             {/* ============================================ */}
             {activeTab === "accumulator" && (
-              <AccumulatorBuilder
-                matches={solverData?.matches || []}
-                aiPreSelectedLegs={aiPreSelectedLegs}
+              <AccumulatorBuilder 
+                matches={solverData?.matches || []} 
               />
             )}
 

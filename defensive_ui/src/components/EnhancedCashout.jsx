@@ -1,12 +1,13 @@
 // defensive_ui/src/components/EnhancedCashout.jsx
-// ✅ Strategic cashout with multiple scenarios (updated safely)
+// ⭐ COMPLETE STRATEGIC CASHOUT with in-game scenarios
+
 import React, { useState } from "react";
 import { useToast } from "./Toast";
 import { useBankroll } from "../context/BankrollContext";
 import { cashoutBet } from "../utils/db";
 
 export default function EnhancedCashout({ bet, onComplete }) {
-  const [cashoutScenario, setCashoutScenario] = useState(null);
+  const [scenario, setScenario] = useState(null);
   const [customAmount, setCustomAmount] = useState("");
   const [selectedBets, setSelectedBets] = useState([]);
   const [processing, setProcessing] = useState(false);
@@ -16,25 +17,18 @@ export default function EnhancedCashout({ bet, onComplete }) {
 
   if (!bet) return null;
 
-  // =============================
-  // TOTAL STAKE (Acca or Singles)
-  // =============================
-  const totalStake =
-    bet.strategy === "accumulator"
-      ? Number(bet.stakes?.ACCA || 0)
-      : Object.values(bet.stakes || {}).reduce((s, v) => s + Number(v || 0), 0);
+  // Calculate total stake
+  const totalStake = bet.strategy === "accumulator"
+    ? Number(bet.stakes?.ACCA || 0)
+    : Object.values(bet.stakes || {}).reduce((s, v) => s + Number(v || 0), 0);
 
-  // =============================
-  // PARSE INDIVIDUAL STAKES
-  // =============================
-  const individualStakes = Object.entries(bet.stakes || {}).flatMap(
-    ([betId, stake]) => {
-      if (bet.strategy === "accumulator" && betId === "ACCA") return []; // handled separately
-
+  // Parse individual stakes
+  const individualStakes = Object.entries(bet.stakes || {})
+    .filter(([betId]) => betId !== "ACCA")
+    .map(([betId, stake]) => {
       const parts = betId.split("_");
       const matchIdx = parseInt(parts[0].replace("M", "")) - 1;
       const betType = parts[1];
-
       const match = bet.matches?.[matchIdx];
 
       return {
@@ -46,98 +40,106 @@ export default function EnhancedCashout({ bet, onComplete }) {
         odds: getOddsForBet(match, betType),
         label: getBetLabel(betType),
       };
-    }
-  );
+    });
 
-  // =============================
-  // SCENARIOS
-  // =============================
+  // ⭐ ENHANCED SCENARIOS with game-state logic
   const scenarios = [
     {
       id: "expecting_draw",
-      name: "🎯 Expecting Draw",
-      description: "Keep Draw, HD (1X), AD (X2). Cash out H, A, HA",
+      name: "🎯 Game Heading to Draw",
+      description: "Cash out home/away bets, keep draw options",
       keepBets: ["D", "HD", "AD"],
       cashoutBets: ["H", "A", "HA"],
       color: "blue",
+      reasoning: "Match looks even - secure draw coverage"
     },
     {
       id: "expecting_home",
-      name: "🏠 Expecting Home Win",
-      description: "Keep Home, HD (1X), HA (12). Cash out D, A, AD",
+      name: "🏠 Home Team Dominating",
+      description: "Cash out away/draw, keep home options",
       keepBets: ["H", "HD", "HA"],
       cashoutBets: ["D", "A", "AD"],
       color: "green",
+      reasoning: "Home team in control - maximize home win profit"
     },
     {
       id: "expecting_away",
-      name: "✈️ Expecting Away Win",
-      description: "Keep Away, AD (X2), HA (12). Cash out H, D, HD",
+      name: "✈️ Away Team on Top",
+      description: "Cash out home/draw, keep away options",
       keepBets: ["A", "AD", "HA"],
       cashoutBets: ["H", "D", "HD"],
       color: "red",
+      reasoning: "Away team dominating - secure away win"
     },
     {
-      id: "no_draw",
-      name: "🚫 Draw Unlikely",
-      description: "Keep Home, Away, HA (12). Cash out D, HD, AD",
+      id: "no_draw_likely",
+      name: "🚫 Draw Unlikely (Action Game)",
+      description: "Cash out all draw bets, keep H/A",
       keepBets: ["H", "A", "HA"],
       cashoutBets: ["D", "HD", "AD"],
       color: "purple",
+      reasoning: "Open game with goals - draw odds dropping"
     },
     {
-      id: "safe_exit",
-      name: "💰 Safe Exit (50%)",
-      description: "Cash out 50% of all positions to secure profit",
-      partial: 0.5,
+      id: "safe_exit_75",
+      name: "💰 Secure 75% (Defensive)",
+      description: "Lock in most value, minimal risk exposure",
+      partial: 0.75,
       color: "yellow",
+      reasoning: "Guaranteed profit, keep 25% riding"
+    },
+    {
+      id: "safe_exit_50",
+      name: "⚖️ Balanced Exit (50%)",
+      description: "Take half, let half run",
+      partial: 0.5,
+      color: "indigo",
+      reasoning: "Balance between security and upside"
     },
     {
       id: "full_cashout",
-      name: "🛑 Full Cashout",
-      description: "Exit all positions immediately",
+      name: "🛑 Emergency Exit (100%)",
+      description: "Close all positions immediately",
       partial: 1.0,
       color: "orange",
+      reasoning: "Cut losses or secure all profit NOW"
     },
     {
       id: "custom",
-      name: "⚙️ Custom Selection",
-      description: "Manually select which bets to cash out",
+      name: "⚙️ Manual Selection",
+      description: "Choose specific bets to cash out",
       custom: true,
       color: "gray",
+      reasoning: "Full control over which bets to exit"
     },
   ];
 
-  // =============================
-  // CASHOUT VALUE ESTIMATOR
-  // =============================
+  // ⭐ IMPROVED VALUE CALCULATION
   const calculateScenarioValue = (scenario) => {
     if (scenario.custom) return null;
 
-    // PARTIAL CASHOUT
     if (scenario.partial) {
+      // Estimate current live value (70% of potential payout)
       const liveValue = individualStakes.reduce(
-        (sum, s) => sum + s.stake * s.odds * 0.7,
+        (sum, s) => sum + s.stake * s.odds * 0.70,
         0
       );
       return liveValue * scenario.partial;
     }
 
-    // STRATEGIC CASHOUT
+    // Strategic: sum of cashed-out positions (70% of full payout)
     let value = 0;
-    individualStakes.forEach((stake) => {
-      if (scenario.cashoutBets.includes(stake.betType)) {
-        value += stake.stake * stake.odds * 0.7;
+    individualStakes.forEach((s) => {
+      if (scenario.cashoutBets.includes(s.betType)) {
+        value += s.stake * s.odds * 0.70;
       }
     });
+
     return value;
   };
 
-  // =============================
-  // HANDLE SCENARIO SELECT
-  // =============================
   const handleScenarioSelect = (scenario) => {
-    setCashoutScenario(scenario);
+    setScenario(scenario);
 
     if (scenario.custom) {
       setSelectedBets([]);
@@ -146,10 +148,12 @@ export default function EnhancedCashout({ bet, onComplete }) {
 
     if (scenario.partial) {
       setSelectedBets(individualStakes.map((s) => s.betId));
+      const suggestedAmount = calculateScenarioValue(scenario);
+      setCustomAmount(suggestedAmount.toFixed(2));
       return;
     }
 
-    // Strategic: select only target bets
+    // Strategic: pre-select target bets
     setSelectedBets(
       individualStakes
         .filter((s) => scenario.cashoutBets.includes(s.betType))
@@ -157,72 +161,76 @@ export default function EnhancedCashout({ bet, onComplete }) {
     );
   };
 
-  // =============================
-  // EXECUTE CASHOUT
-  // =============================
   const executeCashout = async () => {
-    if (!cashoutScenario) return toast.error("Select a scenario first");
+    if (!scenario) {
+      toast.error("Select a cashout strategy first");
+      return;
+    }
 
-    if (cashoutScenario.custom && selectedBets.length === 0)
-      return toast.error("Select at least one bet");
+    if (scenario.custom && selectedBets.length === 0) {
+      toast.error("Select at least one bet to cash out");
+      return;
+    }
 
     let cashoutAmount;
 
-    if (cashoutScenario.partial) {
-      // custom input amount
+    if (scenario.partial) {
       cashoutAmount = parseFloat(customAmount);
-      if (!cashoutAmount || cashoutAmount <= 0)
-        return toast.error("Enter a valid cashout amount");
+      if (!cashoutAmount || cashoutAmount <= 0) {
+        toast.error("Enter valid cashout amount");
+        return;
+      }
     } else {
-      // computed from selected stakes
+      // Calculate from selected bets
       cashoutAmount = selectedBets.reduce((sum, betId) => {
         const s = individualStakes.find((x) => x.betId === betId);
-        return sum + (s ? s.stake * s.odds * 0.7 : 0);
+        return sum + (s ? s.stake * s.odds * 0.70 : 0);
       }, 0);
     }
 
-    if (
-      !confirm(
-        `Confirm cashout?\n\n` +
-          `Cashout: ${cashoutAmount.toFixed(2)}\n` +
-          `Original stake: ${totalStake.toFixed(2)}\n` +
-          `Net: ${(cashoutAmount - totalStake).toFixed(2)}\n\n` +
-          `Keeping: ${
-            individualStakes.length - selectedBets.length
-          } bet(s)`
-      )
-    )
+    // Confirm
+    const keepingCount = individualStakes.length - selectedBets.length;
+    if (!confirm(
+      `💰 Cashout Confirmation\n\n` +
+      `Amount: ${cashoutAmount.toFixed(2)}\n` +
+      `Original Stake: ${totalStake.toFixed(2)}\n` +
+      `Net P/L: ${(cashoutAmount - totalStake).toFixed(2)}\n\n` +
+      `Cashing Out: ${selectedBets.length} bet(s)\n` +
+      `Keeping: ${keepingCount} bet(s)\n\n` +
+      `Reason: ${scenario.reasoning}`
+    )) {
       return;
+    }
 
     setProcessing(true);
 
     try {
       const net = await cashoutBet(bet.id, cashoutAmount);
 
-      if (net > 0) toast.success(`💰 +${net.toFixed(2)} cashed out`);
-      else if (net < 0) toast.warning(`${net.toFixed(2)} loss`);
-      else toast.info("Break-even cashout");
-
-      if (net !== 0) await addWinnings(net);
+      if (net > 0) {
+        await addWinnings(net);
+        toast.success(`✅ Cashed out! Profit: +${net.toFixed(2)}`);
+      } else if (net < 0) {
+        toast.warning(`⚠️ Loss limited: ${net.toFixed(2)}`);
+      } else {
+        toast.info("Break-even cashout");
+      }
 
       onComplete();
     } catch (err) {
       console.error(err);
-      toast.error("Cashout failed");
+      toast.error("Cashout failed: " + err.message);
     } finally {
       setProcessing(false);
     }
   };
 
-  // =============================
-  // RENDER
-  // =============================
   return (
     <div className="space-y-4">
-      {/* Summary */}
-      <div className="bg-gray-50 p-3 rounded border">
-        <h4 className="font-semibold mb-2">Current Position</h4>
-        <div className="grid grid-cols-2 text-sm">
+      {/* Current Position */}
+      <div className="bg-gray-50 rounded border p-3">
+        <h4 className="font-semibold mb-2">📊 Current Position</h4>
+        <div className="grid grid-cols-2 text-sm gap-2">
           <div>
             <div className="text-gray-600">Total Stake</div>
             <div className="font-bold">{totalStake.toFixed(2)}</div>
@@ -234,48 +242,53 @@ export default function EnhancedCashout({ bet, onComplete }) {
         </div>
       </div>
 
-      {/* SCENARIO LIST */}
+      {/* Scenario Selection */}
       <div>
-        <h4 className="font-semibold mb-2">Choose Cashout Strategy</h4>
-        <div className="space-y-2 max-h-64 overflow-y-auto">
-          {scenarios.map((scenario) => {
-            const value = calculateScenarioValue(scenario);
-            const isSelected = cashoutScenario?.id === scenario.id;
+        <h4 className="font-semibold mb-2">🎮 Choose Strategy</h4>
+        <div className="space-y-2 max-h-80 overflow-y-auto">
+          {scenarios.map((s) => {
+            const value = calculateScenarioValue(s);
+            const isSelected = scenario?.id === s.id;
 
             return (
               <button
-                key={scenario.id}
-                onClick={() => handleScenarioSelect(scenario)}
-                className={`w-full text-left p-3 rounded-lg border-2 ${
+                key={s.id}
+                onClick={() => handleScenarioSelect(s)}
+                className={`w-full text-left p-3 rounded-lg border-2 transition ${
                   isSelected
-                    ? `border-${scenario.color}-500 bg-${scenario.color}-50`
+                    ? `border-${s.color}-500 bg-${s.color}-50`
                     : "border-gray-200 hover:border-gray-300"
                 }`}
               >
-                <div className="flex justify-between mb-1">
-                  <span className="font-medium">{scenario.name}</span>
-                  {value ? (
-                    <span className="text-sm font-bold text-green-600">
+                <div className="flex justify-between items-start mb-1">
+                  <div className="flex-1">
+                    <div className="font-medium">{s.name}</div>
+                    <div className="text-xs text-gray-600">{s.description}</div>
+                    <div className="text-xs text-gray-500 mt-1 italic">
+                      💡 {s.reasoning}
+                    </div>
+                  </div>
+                  {value && (
+                    <div className="text-sm font-bold text-green-600 ml-2">
                       ~{value.toFixed(2)}
-                    </span>
-                  ) : null}
+                    </div>
+                  )}
                 </div>
-                <div className="text-xs text-gray-600">{scenario.description}</div>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* CUSTOM SELECTION */}
-      {cashoutScenario?.custom && (
+      {/* Custom Bet Selection */}
+      {scenario?.custom && (
         <div>
           <h4 className="font-semibold mb-2">Select Bets to Cash Out</h4>
           <div className="space-y-2 max-h-48 overflow-y-auto">
             {individualStakes.map((s) => (
               <label
                 key={s.betId}
-                className="flex items-center p-2 rounded border hover:bg-gray-50"
+                className="flex items-center p-2 border rounded hover:bg-gray-50 cursor-pointer"
               >
                 <input
                   type="checkbox"
@@ -289,12 +302,12 @@ export default function EnhancedCashout({ bet, onComplete }) {
                   }
                   className="mr-3"
                 />
-                <div>
+                <div className="flex-1">
                   <div className="font-medium text-sm">
                     {s.matchName}: {s.label}
                   </div>
                   <div className="text-xs text-gray-600">
-                    Stake {s.stake.toFixed(2)} @ {s.odds.toFixed(2)}
+                    Stake {s.stake.toFixed(2)} @ {s.odds.toFixed(2)}x
                   </div>
                 </div>
               </label>
@@ -303,55 +316,53 @@ export default function EnhancedCashout({ bet, onComplete }) {
         </div>
       )}
 
-      {/* PARTIAL CASHOUT AMOUNT */}
-      {cashoutScenario?.partial && (
+      {/* Partial Cashout Amount */}
+      {scenario?.partial && (
         <div>
           <label className="block text-sm font-medium mb-2">
-            Cashout Amount
+            💵 Cashout Amount
           </label>
           <input
             type="number"
             value={customAmount}
             onChange={(e) => setCustomAmount(e.target.value)}
             className="w-full border p-3 rounded"
+            placeholder="Enter amount"
           />
           <div className="text-xs text-gray-500 mt-1">
-            Suggested:{" "}
-            {calculateScenarioValue(cashoutScenario)?.toFixed(2) || "—"}
+            Suggested: {calculateScenarioValue(scenario)?.toFixed(2)}
           </div>
         </div>
       )}
 
-      {/* Preview (strategic only) */}
-      {cashoutScenario &&
-        !cashoutScenario.custom &&
-        !cashoutScenario.partial && (
-          <div className="bg-blue-50 p-3 rounded border border-blue-200">
-            <div className="text-sm font-medium mb-1">Preview</div>
-            <div className="text-xs space-y-1">
-              <div>
-                <span className="text-green-700 font-semibold">Keeping:</span>{" "}
-                {individualStakes
-                  .filter((s) => !selectedBets.includes(s.betId))
-                  .map((s) => s.label)
-                  .join(", ")}
-              </div>
-              <div>
-                <span className="text-red-700 font-semibold">Cashing:</span>{" "}
-                {individualStakes
-                  .filter((s) => selectedBets.includes(s.betId))
-                  .map((s) => s.label)
-                  .join(", ")}
-              </div>
+      {/* Preview */}
+      {scenario && !scenario.custom && !scenario.partial && (
+        <div className="bg-blue-50 border border-blue-200 rounded p-3 text-sm">
+          <div className="font-medium mb-2">📋 Preview</div>
+          <div className="space-y-1 text-xs">
+            <div>
+              <span className="text-green-700 font-semibold">Keeping:</span>{" "}
+              {individualStakes
+                .filter((s) => !selectedBets.includes(s.betId))
+                .map((s) => s.label)
+                .join(", ") || "None"}
+            </div>
+            <div>
+              <span className="text-red-700 font-semibold">Cashing Out:</span>{" "}
+              {individualStakes
+                .filter((s) => selectedBets.includes(s.betId))
+                .map((s) => s.label)
+                .join(", ") || "None"}
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-      {/* EXECUTE */}
+      {/* Execute Button */}
       <button
         onClick={executeCashout}
-        disabled={processing || !cashoutScenario}
-        className="w-full px-4 py-3 bg-orange-600 text-white rounded-lg disabled:bg-gray-400 font-medium"
+        disabled={processing || !scenario}
+        className="w-full px-4 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:bg-gray-400 font-medium shadow-md"
       >
         {processing ? "Processing..." : "💰 Execute Cashout"}
       </button>
@@ -359,9 +370,7 @@ export default function EnhancedCashout({ bet, onComplete }) {
   );
 }
 
-// =============================
-// HELPERS
-// =============================
+// Helper functions
 function getOddsForBet(match, betType) {
   if (!match) return 1.0;
   const map = {
